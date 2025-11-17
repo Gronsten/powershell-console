@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.9.0"
+$script:ConsoleVersion = "1.9.1"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -43,6 +43,9 @@ if ($MyInvocation.Line -match '--help') {
     Write-Host "  --version, -Version, -v      Show version number"
     Write-Host "  --help, -Help, -h            Show this help message"
     Write-Host ""
+    Write-Host "Sponsor: " -ForegroundColor Magenta -NoNewline
+    Write-Host "https://github.com/sponsors/Gronsten" -ForegroundColor Blue
+    Write-Host ""
     exit 0
 }
 
@@ -67,6 +70,9 @@ if ($Help -or $h) {
     Write-Host "Options:" -ForegroundColor Yellow
     Write-Host "  --version, -Version, -v      Show version number"
     Write-Host "  --help, -Help, -h            Show this help message"
+    Write-Host ""
+    Write-Host "Sponsor: " -ForegroundColor Magenta -NoNewline
+    Write-Host "https://github.com/sponsors/Gronsten" -ForegroundColor Blue
     Write-Host ""
     exit 0
 }

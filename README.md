@@ -1,6 +1,20 @@
 # PowerShell Console
 
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/Gronsten?style=social)](https://github.com/sponsors/Gronsten)
+
 A comprehensive, interactive PowerShell management console for AWS infrastructure, package managers, development utilities, and system administration. Features multi-account AWS management with Okta SSO, unified package management (Scoop/npm/pip/winget), development environment backups, and network utilities.
+
+> [!TIP]
+> **NEW in v1.9.0:** Automatic IAM role session duration discovery and enhanced AWS Okta sync that maintains all okta.yaml sections while preventing duplicates!
+
+> [!NOTE]
+> **DEV/PROD Environment Separation:** This project uses a dual environment structure (`_dev/` for development, `_prod/` for production) with a smart upgrade script that automatically merges configuration changes while preserving your custom settings.
+
+## Demo
+
+![Demo](assets/demo.gif)
+
+*Interactive arrow-key navigation, AWS account switching, package management, and more*
 
 ## Features
 
