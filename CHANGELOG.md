@@ -20,6 +20,35 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.9.1 (2025-11-17)
+
+**GitHub Enhancements: Sponsor Links & Visual Improvements**
+
+Enhanced GitHub repository presence with sponsor support and improved README presentation.
+
+**No Config Changes Required** - This release has no configuration changes.
+
+**New Features:**
+- **GitHub Sponsors Integration**
+  - Added `.github/FUNDING.yml` for automatic sponsor button on repo page
+  - Added sponsor badge to README (social style badge at top)
+  - Added sponsor link to `--help` output in console.ps1 (colored display)
+
+- **README Visual Enhancements**
+  - Added colorful GitHub alert callouts (TIP and NOTE boxes)
+  - Highlights latest v1.9.0 features in blue TIP box
+  - Explains DEV/PROD structure in gray NOTE box
+  - Added Demo section with placeholder for future demo.gif
+
+- **Assets Directory Structure**
+  - Created `assets/` directory for demo GIF
+  - Added instructional README for creating demo recordings
+
+**Documentation:**
+- Enhanced README presentation with modern GitHub markdown features
+- Improved visibility of key project features and structure
+- Added guidance for future demo content creation
+
 ### v1.9.0 (2025-11-17)
 
 **Okta Sync Enhancements: Auto-Discovery & Intelligent Updates**
