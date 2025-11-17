@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.8.1"
+$script:ConsoleVersion = "1.9.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -4275,6 +4275,7 @@ function Sync-AwsAccountsFromOkta {
                     FriendlyName = $friendlyName
                     Profiles = @()
                     Roles = @()
+                    RoleMaxDurations = @{}
                 }
             }
 
@@ -4284,6 +4285,50 @@ function Sync-AwsAccountsFromOkta {
             }
 
             Write-Host "  Discovered: $friendlyName ($accountId) - Role: $roleName" -ForegroundColor Green
+        }
+    }
+
+    # Step 3.5: Discover role max session durations
+    Write-Host "`n══ Step 3.5: Discovering role session durations ══" -ForegroundColor Cyan
+    Write-Host ""
+
+    foreach ($accountId in $discoveredAccounts.Keys) {
+        $info = $discoveredAccounts[$accountId]
+
+        foreach ($roleName in $info.Roles) {
+            # Find a profile that uses this role
+            $sampleProfile = $info.Profiles | Where-Object { $_ -match "-${roleName}$" } | Select-Object -First 1
+
+            if ($sampleProfile) {
+                try {
+                    Write-Host "  Querying role: $roleName in $($info.FriendlyName)..." -ForegroundColor Gray -NoNewline
+
+                    $roleInfo = aws iam get-role --role-name $roleName --profile $sampleProfile --output json 2>$null | ConvertFrom-Json
+
+                    if ($roleInfo -and $roleInfo.Role.MaxSessionDuration) {
+                        $maxDuration = $roleInfo.Role.MaxSessionDuration
+                        $info.RoleMaxDurations[$roleName] = $maxDuration
+
+                        $hours = [math]::Floor($maxDuration / 3600)
+                        $minutes = [math]::Floor(($maxDuration % 3600) / 60)
+
+                        if ($minutes -gt 0) {
+                            Write-Host " ${hours}h ${minutes}m ($maxDuration seconds)" -ForegroundColor Green
+                        } else {
+                            Write-Host " ${hours}h ($maxDuration seconds)" -ForegroundColor Green
+                        }
+                    } else {
+                        Write-Host " using default 1h (3600 seconds)" -ForegroundColor Yellow
+                        $info.RoleMaxDurations[$roleName] = 3600
+                    }
+                } catch {
+                    Write-Host " error, using default 1h" -ForegroundColor Yellow
+                    $info.RoleMaxDurations[$roleName] = 3600
+                }
+            } else {
+                # No profile found for this role (shouldn't happen, but fallback)
+                $info.RoleMaxDurations[$roleName] = 3600
+            }
         }
     }
 
@@ -4504,9 +4549,16 @@ function Sync-AwsAccountsFromOkta {
                 $config.environments.$matchByName | Add-Member -NotePropertyName 'preferredRole' -NotePropertyValue $info.Roles[0] -Force
             }
 
-            # Set session duration to 1 hour for all synced accounts
+            # Set session duration based on preferred role's max duration
+            $preferredRole = $config.environments.$matchByName.preferredRole
+            $sessionDuration = "3600"  # Default
+            if ($info.RoleMaxDurations.ContainsKey($preferredRole)) {
+                $sessionDuration = $info.RoleMaxDurations[$preferredRole].ToString()
+            }
             if (-not $config.environments.$matchByName.PSObject.Properties['sessionDuration']) {
-                $config.environments.$matchByName | Add-Member -NotePropertyName 'sessionDuration' -NotePropertyValue "3600" -Force
+                $config.environments.$matchByName | Add-Member -NotePropertyName 'sessionDuration' -NotePropertyValue $sessionDuration -Force
+            } else {
+                $config.environments.$matchByName.sessionDuration = $sessionDuration
             }
 
             # Add profile map if missing
@@ -4589,13 +4641,19 @@ function Sync-AwsAccountsFromOkta {
                 $needsUpdate = $true
             }
 
-            # Set session duration to 1 hour for all synced accounts
+            # Set session duration based on preferred role's max duration
+            $preferredRole = $config.environments.$existingEnv.preferredRole
+            $sessionDuration = "3600"  # Default
+            if ($info.RoleMaxDurations.ContainsKey($preferredRole)) {
+                $sessionDuration = $info.RoleMaxDurations[$preferredRole].ToString()
+            }
+
             if (-not $config.environments.$existingEnv.PSObject.Properties['sessionDuration'] -or
-                $config.environments.$existingEnv.sessionDuration -ne "3600") {
+                $config.environments.$existingEnv.sessionDuration -ne $sessionDuration) {
                 if (-not $config.environments.$existingEnv.PSObject.Properties['sessionDuration']) {
-                    $config.environments.$existingEnv | Add-Member -NotePropertyName 'sessionDuration' -NotePropertyValue "3600" -Force
+                    $config.environments.$existingEnv | Add-Member -NotePropertyName 'sessionDuration' -NotePropertyValue $sessionDuration -Force
                 } else {
-                    $config.environments.$existingEnv.sessionDuration = "3600"
+                    $config.environments.$existingEnv.sessionDuration = $sessionDuration
                 }
                 $needsUpdate = $true
             }
@@ -4635,8 +4693,13 @@ function Sync-AwsAccountsFromOkta {
                 actions = @("instanceManagement")
             }
 
-            # Set session duration to 1 hour for all synced accounts
-            $newEnv.sessionDuration = "3600"
+            # Set session duration based on preferred role's max duration
+            $preferredRole = $newEnv.preferredRole
+            $sessionDuration = "3600"  # Default
+            if ($info.RoleMaxDurations.ContainsKey($preferredRole)) {
+                $sessionDuration = $info.RoleMaxDurations[$preferredRole].ToString()
+            }
+            $newEnv.sessionDuration = $sessionDuration
 
             # Create profile map
             foreach ($role in $info.Roles) {
@@ -4655,47 +4718,134 @@ function Sync-AwsAccountsFromOkta {
         }
     }
 
-    # Update okta.yaml profiles to match discovered accounts
-    Write-Host "`n══ Step 6: Updating okta.yaml profiles ══" -ForegroundColor Cyan
+    # Update okta.yaml (idps, roles, and profiles) to match discovered accounts
+    Write-Host "`n══ Step 6: Updating okta.yaml ══" -ForegroundColor Cyan
     Write-Host ""
 
     $oktaYamlContent = Get-Content $oktaYamlPath -Raw
+    $idpsAdded = @()
+    $rolesAdded = @()
     $profilesAdded = @()
+
+    # Step 6a: Update IDP section
+    Write-Host "Checking IDP section..." -ForegroundColor Gray
+    foreach ($accountId in $discoveredAccounts.Keys) {
+        $friendlyName = $discoveredAccounts[$accountId].FriendlyName
+        $idpArn = "arn:aws:iam::${accountId}:saml-provider/CFA-OKTA-PROD"
+
+        # Check if IDP entry exists
+        if ($oktaYamlContent -notmatch [regex]::Escape("`"$idpArn`"")) {
+            # Find the idps section and add the entry
+            $idpEntry = "`n    `"$idpArn`": `"$friendlyName`""
+
+            # Insert before the roles section
+            if ($oktaYamlContent -match '(?s)(  idps:.*?)(  roles:)') {
+                $oktaYamlContent = $oktaYamlContent -replace '(  idps:.*?)(  roles:)', "`$1$idpEntry`n`n`$2"
+                $idpsAdded += $friendlyName
+                Write-Host "  ✓ Added IDP: $friendlyName (account $accountId)" -ForegroundColor Green
+            }
+        }
+    }
+
+    # Step 6b: Update roles section
+    Write-Host "Checking roles section..." -ForegroundColor Gray
+    foreach ($accountId in $discoveredAccounts.Keys) {
+        foreach ($roleName in $discoveredAccounts[$accountId].Roles) {
+            $roleArn = "arn:aws:iam::${accountId}:role/${roleName}"
+
+            # Check if role entry exists
+            if ($oktaYamlContent -notmatch [regex]::Escape("`"$roleArn`"")) {
+                # Normalize role display name
+                $displayName = $roleName
+                if ($roleName -match '^(admin|Admin)$') {
+                    $displayName = "Admin"
+                } elseif ($roleName -match '^(devops|DevOps|Devops)$') {
+                    $displayName = "devops"
+                }
+
+                $roleEntry = "`n    `"$roleArn`": `"$displayName`""
+
+                # Insert before the profiles section
+                if ($oktaYamlContent -match '(?s)(  roles:.*?)(  profiles:)') {
+                    $oktaYamlContent = $oktaYamlContent -replace '(  roles:.*?)(  profiles:)', "`$1$roleEntry`n`n`$2"
+                    $rolesAdded += "$roleName (account $accountId)"
+                    Write-Host "  ✓ Added role: $displayName for account $accountId" -ForegroundColor Green
+                }
+            }
+        }
+    }
+
+    # Step 6c: Update profiles section
+    Write-Host "Checking profiles section..." -ForegroundColor Gray
+    $profilesUpdated = @()
 
     foreach ($accountId in $discoveredAccounts.Keys) {
         $info = $discoveredAccounts[$accountId]
         $friendlyName = $info.FriendlyName
 
         foreach ($profileName in $info.Profiles) {
-            # Check if profile already exists in okta.yaml
-            if ($oktaYamlContent -notmatch "^\s+${profileName}:") {
-                # Extract role from profile name: friendlyname-CFA-OKTA-PROD-RoleName
-                if ($profileName -match '-CFA-OKTA-PROD-(.+)$') {
-                    $roleName = $matches[1]
+            # Extract role from profile name: friendlyname-CFA-OKTA-PROD-RoleName
+            if ($profileName -match '-CFA-OKTA-PROD-(.+)$') {
+                $roleName = $matches[1]
 
+                # Get max session duration for this role (discovered in Step 3.5)
+                $maxDuration = 3600  # Default to 1 hour
+                if ($info.RoleMaxDurations.ContainsKey($roleName)) {
+                    $maxDuration = $info.RoleMaxDurations[$roleName]
+                }
+
+                # Check if profile already exists
+                if ($oktaYamlContent -match "(?m)^\s+${profileName}:") {
+                    # Profile exists - check if session duration needs updating
+                    $profilePattern = "(?ms)(^\s+${profileName}:.*?aws-session-duration:\s*)(\d+)"
+                    if ($oktaYamlContent -match $profilePattern) {
+                        $currentDuration = $matches[2]
+                        if ($currentDuration -ne $maxDuration.ToString()) {
+                            # Update session duration
+                            $oktaYamlContent = $oktaYamlContent -replace $profilePattern, "`${1}$maxDuration"
+                            $profilesUpdated += "$profileName (${currentDuration}s → ${maxDuration}s)"
+                            Write-Host "  ✓ Updated profile: $profileName session duration: ${currentDuration}s → ${maxDuration}s" -ForegroundColor Cyan
+                        }
+                    }
+                } else {
+                    # Profile doesn't exist - add it
                     # Create profile entry
                     $profileEntry = @"
 
     ${profileName}:
       aws-iam-idp: "arn:aws:iam::${accountId}:saml-provider/CFA-OKTA-PROD"
       aws-iam-role: "arn:aws:iam::${accountId}:role/${roleName}"
-      aws-session-duration: 3600
+      aws-session-duration: $maxDuration
 "@
                     $oktaYamlContent = $oktaYamlContent.TrimEnd() + $profileEntry + "`n"
                     $profilesAdded += $profileName
-                    Write-Host "  ✓ Added profile: $profileName" -ForegroundColor Green
+                    Write-Host "  ✓ Added profile: $profileName (${maxDuration}s session)" -ForegroundColor Green
                 }
             }
         }
     }
 
-    if ($profilesAdded.Count -gt 0) {
+    # Save changes if any were made
+    $totalChanges = $idpsAdded.Count + $rolesAdded.Count + $profilesAdded.Count + $profilesUpdated.Count
+    if ($totalChanges -gt 0) {
         Write-Host ""
         Write-Host "Saving changes to okta.yaml..." -ForegroundColor Yellow
         Set-Content -Path $oktaYamlPath -Value $oktaYamlContent -Encoding UTF8
-        Write-Host "✓ Okta.yaml updated with $($profilesAdded.Count) new profile(s)" -ForegroundColor Green
+        Write-Host "✓ Okta.yaml updated:" -ForegroundColor Green
+        if ($idpsAdded.Count -gt 0) {
+            Write-Host "  - Added $($idpsAdded.Count) IDP mapping(s)" -ForegroundColor Cyan
+        }
+        if ($rolesAdded.Count -gt 0) {
+            Write-Host "  - Added $($rolesAdded.Count) role(s)" -ForegroundColor Cyan
+        }
+        if ($profilesAdded.Count -gt 0) {
+            Write-Host "  - Added $($profilesAdded.Count) profile(s)" -ForegroundColor Cyan
+        }
+        if ($profilesUpdated.Count -gt 0) {
+            Write-Host "  - Updated $($profilesUpdated.Count) profile(s) with new session durations" -ForegroundColor Cyan
+        }
     } else {
-        Write-Host "  No new profiles needed in okta.yaml" -ForegroundColor Green
+        Write-Host "  No changes needed in okta.yaml - all sections are up to date" -ForegroundColor Green
     }
 
     # Save updated config.json
