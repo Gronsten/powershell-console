@@ -20,6 +20,75 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.9.0 (2025-11-17)
+
+**Okta Sync Enhancements: Auto-Discovery & Intelligent Updates**
+
+Major enhancements to the AWS account sync function with automatic IAM role session duration discovery, comprehensive okta.yaml management, and duplicate prevention.
+
+**No Config Changes Required** - This release is fully backward compatible.
+
+**New Features:**
+- **Automatic Session Duration Discovery** (Step 3.5)
+  - Queries `aws iam get-role` for each discovered role's MaxSessionDuration
+  - Uses actual IAM configuration instead of hardcoded 3600 (1 hour)
+  - Typically discovers 12h for Admin roles, 4h for devops roles
+  - Graceful fallback to 1h if query fails or permissions denied
+  - Updates both okta.yaml profiles and config.json sessionDuration
+  - Output shows discovered durations: "Admin in etsnettoolsprod... 12h (43200 seconds)"
+
+- **Comprehensive okta.yaml Management** (Enhanced Step 6)
+  - Step 6a: Automatically adds missing IDP mappings (account ID → friendly name)
+  - Step 6b: Automatically adds missing role ARNs with normalized display names
+  - Step 6c: Adds new profiles AND updates existing profiles with new session durations
+  - All three sections (idps, roles, profiles) now kept in sync automatically
+  - Eliminates all manual okta.yaml editing
+
+- **Profile Update Detection**
+  - Sync now updates existing profiles when session duration changes
+  - Detects IAM configuration changes and auto-updates okta.yaml
+  - Output shows updates: "Updated profile: <name> session duration: 3600s → 43200s"
+  - Prevents stale session duration values
+
+- **Duplicate Prevention Fix**
+  - Fixed critical regex bug that caused duplicate profile entries
+  - Changed from `^\s+` to `(?m)^\s+` for multiline matching
+  - Now correctly detects existing profiles before adding
+  - Prevents okta.yaml bloat from repeated sync runs
+
+**Enhanced Output:**
+- Step 3.5 shows role duration discovery with human-readable times (12h, 4h, etc.)
+- Step 6 separates IDP, roles, and profiles with clear section headers
+- Summary shows counts: "Added X IDP mapping(s), Added Y role(s), Updated Z profile(s)"
+- Color-coded updates (Green for adds, Cyan for updates)
+
+**Technical Details:**
+- Session duration discovery uses already-authenticated credentials from Step 2
+- Per-role query (~100-300ms each, ~2-4 seconds total for typical setup)
+- Multiline regex pattern with dotall mode for reliable profile updates
+- Profile update pattern: `(?ms)(^\s+${profileName}:.*?aws-session-duration:\s*)(\d+)`
+- RoleMaxDurations hashtable tracks discovered durations per account/role
+
+**Bug Fixes:**
+- Fixed duplicate profile creation (multiline regex)
+- Fixed sync not updating existing profile session durations
+- Fixed IDP and roles sections not being updated by sync
+
+**Backward Compatibility:**
+- Existing okta.yaml files work unchanged
+- Sync will update profiles to discovered durations on next run
+- Existing config.json sessionDuration values will be updated
+- No breaking changes
+
+**Files Changed:**
+- `console.ps1` - Session duration discovery, comprehensive okta.yaml updates, duplicate fix
+
+**Performance Impact:**
+- Additional 2-4 seconds per sync for IAM role queries
+- Acceptable trade-off for automatic optimal configuration
+
+---
+
 ### v1.8.0 (2025-11-14)
 
 **Pause Standardization & User Experience Enhancements**
