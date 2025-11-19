@@ -20,6 +20,26 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.9.2 (2025-11-19)
+
+**Bug Fix: Alohomora Non-RDP Window Launch**
+
+Fixed Alohomora remote access to launch in a new window for non-RDP connections (SSH, HTTPS, etc.), matching the behavior of RDP connections.
+
+**No Config Changes Required** - This release has no configuration changes.
+
+**Bug Fixes:**
+- **Alohomora Remote Access - Non-RDP Connections**
+  - Fixed issue where answering 'n' to "Is this an RDP connection?" would launch Alohomora in the current console window (blocking the session)
+  - Non-RDP connections now launch in a new PowerShell window, identical to RDP connection behavior
+  - Added helpful connection banner showing browser URL (`https://localhost:<port>`) in the new window
+  - Both connection types (RDP and non-RDP) now provide consistent user experience
+
+**Technical Details:**
+- Updated `Start-AlohaConnection` function in [console.ps1:5977-6015](console.ps1#L5977-L6015)
+- Non-RDP path now uses `Start-Process` with wrapper script (same pattern as RDP path)
+- Keeps tunnel window open with instructions, prevents accidental disconnection
+
 ### v1.9.1 (2025-11-17)
 
 **GitHub Enhancements: Sponsor Links & Visual Improvements**
