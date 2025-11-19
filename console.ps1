@@ -5873,6 +5873,72 @@ function Test-InstanceConnectivity {
     Get-Ec2InstanceInfo -InstanceId $instanceId -Title "Instance Connectivity Test"
 }
 
+function New-AlohaWrapperScript {
+    <#
+    .SYNOPSIS
+    Creates a wrapper script for Aloha connections that displays instructions and handles errors.
+
+    .PARAMETER Command
+    The Aloha command to execute
+
+    .PARAMETER AdditionalMessage
+    Optional additional message to display in the banner (e.g., browser URL for non-RDP)
+
+    .OUTPUTS
+    Returns the path to the created wrapper script file
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Command,
+
+        [Parameter(Mandatory=$false)]
+        [string]$AdditionalMessage = ""
+    )
+
+    # Build the wrapper script content
+    $wrapperScript = @"
+`$ErrorActionPreference = 'Continue'
+Write-Host ''
+Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
+Write-Host '  ALOHA CONNECTION - IMPORTANT INSTRUCTIONS' -ForegroundColor Yellow
+Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
+Write-Host ''
+Write-Host '  When Aloha asks: Would you like to quit? (y/N)' -ForegroundColor White
+Write-Host '  → Press ENTER or type N to keep connection alive' -ForegroundColor Green
+Write-Host '  → DO NOT type Y or close this window!' -ForegroundColor Red
+Write-Host ''
+"@
+
+    # Add additional message if provided (e.g., browser URL for non-RDP connections)
+    if ($AdditionalMessage) {
+        $wrapperScript += @"
+Write-Host '  $AdditionalMessage' -ForegroundColor Cyan
+"@
+    }
+
+    # Add command display and execution logic
+    $wrapperScript += @"
+Write-Host '  Command: $Command' -ForegroundColor Gray
+Write-Host ''
+Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
+Write-Host ''
+
+try {
+    # Run Aloha command - run directly to allow interactive prompts
+    Invoke-Expression "$Command"
+} catch {
+    Write-Host ''
+    Write-Host 'Error running Aloha: `$(`$_.Exception.Message)' -ForegroundColor Red
+}
+"@
+
+    # Save wrapper script to temp file
+    $tempScript = Join-Path $env:TEMP "aloha_wrapper_$(Get-Date -Format 'yyyyMMddHHmmss').ps1"
+    $wrapperScript | Out-File -FilePath $tempScript -Encoding UTF8
+
+    return $tempScript
+}
+
 function Start-AlohaConnection {
     param([bool]$IsRdp = $false)
 
@@ -5892,35 +5958,8 @@ function Start-AlohaConnection {
         # Ask about RDP Manager for RDP connections
         $rdpChoice = Read-Host "Launch RDP Manager after connection? (Y/n)"
 
-        # Create a wrapper script that keeps window open on error
-        $wrapperScript = @"
-`$ErrorActionPreference = 'Continue'
-Write-Host ''
-Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
-Write-Host '  ALOHA CONNECTION - IMPORTANT INSTRUCTIONS' -ForegroundColor Yellow
-Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
-Write-Host ''
-Write-Host '  When Aloha asks: Would you like to quit? (y/N)' -ForegroundColor White
-Write-Host '  → Press ENTER or type N to keep connection alive' -ForegroundColor Green
-Write-Host '  → DO NOT type Y or close this window!' -ForegroundColor Red
-Write-Host ''
-Write-Host '  Command: $Command' -ForegroundColor Gray
-Write-Host ''
-Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
-Write-Host ''
-
-try {
-    # Run Aloha command - run directly to allow interactive prompts
-    Invoke-Expression "$Command"
-} catch {
-    Write-Host ''
-    Write-Host 'Error running Aloha: `$(`$_.Exception.Message)' -ForegroundColor Red
-}
-"@
-
-        # Save wrapper script to temp file
-        $tempScript = Join-Path $env:TEMP "aloha_wrapper_$(Get-Date -Format 'yyyyMMddHHmmss').ps1"
-        $wrapperScript | Out-File -FilePath $tempScript -Encoding UTF8
+        # Create wrapper script using helper function
+        $tempScript = New-AlohaWrapperScript -Command $Command
 
         # Launch in new PowerShell window with custom title and no profile to avoid Oh-My-Posh conflicts
         $windowTitle = "Aloha Connection - $global:remoteIP"
@@ -5978,36 +6017,9 @@ if (`$connected) {
         # For web interfaces (SSH, HTTPS, etc.), launch tunnel in new window
         Write-Host "Tunnel will be established. Connect via browser to: https://localhost:$global:localPort" -ForegroundColor Cyan
 
-        # Create a wrapper script that keeps window open on error (similar to RDP path)
-        $wrapperScript = @"
-`$ErrorActionPreference = 'Continue'
-Write-Host ''
-Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
-Write-Host '  ALOHA CONNECTION - IMPORTANT INSTRUCTIONS' -ForegroundColor Yellow
-Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
-Write-Host ''
-Write-Host '  When Aloha asks: Would you like to quit? (y/N)' -ForegroundColor White
-Write-Host '  → Press ENTER or type N to keep connection alive' -ForegroundColor Green
-Write-Host '  → DO NOT type Y or close this window!' -ForegroundColor Red
-Write-Host ''
-Write-Host '  Connect via browser to: https://localhost:$global:localPort' -ForegroundColor Cyan
-Write-Host '  Command: $Command' -ForegroundColor Gray
-Write-Host ''
-Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
-Write-Host ''
-
-try {
-    # Run Aloha command - run directly to allow interactive prompts
-    Invoke-Expression "$Command"
-} catch {
-    Write-Host ''
-    Write-Host 'Error running Aloha: `$(`$_.Exception.Message)' -ForegroundColor Red
-}
-"@
-
-        # Save wrapper script to temp file
-        $tempScript = Join-Path $env:TEMP "aloha_wrapper_$(Get-Date -Format 'yyyyMMddHHmmss').ps1"
-        $wrapperScript | Out-File -FilePath $tempScript -Encoding UTF8
+        # Create wrapper script using helper function with browser URL message
+        $browserUrl = "Connect via browser to: https://localhost:$global:localPort"
+        $tempScript = New-AlohaWrapperScript -Command $Command -AdditionalMessage $browserUrl
 
         # Launch in new PowerShell window with custom title and no profile to avoid Oh-My-Posh conflicts
         $windowTitle = "Aloha Connection - $global:remoteIP"

@@ -35,8 +35,14 @@ Fixed Alohomora remote access to launch in a new window for non-RDP connections 
   - Added helpful connection banner showing browser URL (`https://localhost:<port>`) in the new window
   - Both connection types (RDP and non-RDP) now provide consistent user experience
 
+**Code Improvements:**
+- **Refactored wrapper script generation** - Eliminated code duplication by creating `New-AlohaWrapperScript` helper function
+- Both RDP and non-RDP paths now use shared wrapper script generation logic
+- Cleaner, more maintainable code with proper PowerShell documentation
+
 **Technical Details:**
-- Updated `Start-AlohaConnection` function in [console.ps1:5977-6015](console.ps1#L5977-L6015)
+- Added `New-AlohaWrapperScript` helper function in [console.ps1:5876-5940](console.ps1#L5876-L5940)
+- Updated `Start-AlohaConnection` function in [console.ps1:5942-6031](console.ps1#L5942-L6031)
 - Non-RDP path now uses `Start-Process` with wrapper script (same pattern as RDP path)
 - Keeps tunnel window open with instructions, prevents accidental disconnection
 
