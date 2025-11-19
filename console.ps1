@@ -5912,12 +5912,14 @@ Write-Host ''
     # Add additional message if provided (e.g., browser URL for non-RDP connections)
     if ($AdditionalMessage) {
         $wrapperScript += @"
+
 Write-Host '  $AdditionalMessage' -ForegroundColor Cyan
 "@
     }
 
     # Add command display and execution logic
     $wrapperScript += @"
+
 Write-Host '  Command: $Command' -ForegroundColor Gray
 Write-Host ''
 Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
@@ -5952,11 +5954,11 @@ function Start-AlohaConnection {
     } else {
         $Command = "aloha -i $global:awsInstance --localPort $global:localPort -f -r $global:remoteIP --remotePort $global:remotePort -y"
     }
-    Write-Host "Executing: $Command" -ForegroundColor Green
-
     if ($IsRdp) {
         # Ask about RDP Manager for RDP connections
         $rdpChoice = Read-Host "Launch RDP Manager after connection? (Y/n)"
+
+        Write-Host "Launching Aloha in new window: $Command" -ForegroundColor Green
 
         # Create wrapper script using helper function
         $tempScript = New-AlohaWrapperScript -Command $Command
@@ -6015,6 +6017,7 @@ if (`$connected) {
     }
     else {
         # For web interfaces (SSH, HTTPS, etc.), launch tunnel in new window
+        Write-Host "Launching Aloha in new window: $Command" -ForegroundColor Green
         Write-Host "Tunnel will be established. Connect via browser to: https://localhost:$global:localPort" -ForegroundColor Cyan
 
         # Create wrapper script using helper function with browser URL message
