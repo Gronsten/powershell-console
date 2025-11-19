@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.9.1"
+$script:ConsoleVersion = "1.9.2"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -5873,27 +5873,30 @@ function Test-InstanceConnectivity {
     Get-Ec2InstanceInfo -InstanceId $instanceId -Title "Instance Connectivity Test"
 }
 
-function Start-AlohaConnection {
-    param([bool]$IsRdp = $false)
+function New-AlohaWrapperScript {
+    <#
+    .SYNOPSIS
+    Creates a wrapper script for Aloha connections that displays instructions and handles errors.
 
-    Write-Host "Connecting to $global:remoteIP via Aloha..." -ForegroundColor Green
+    .PARAMETER Command
+    The Aloha command to execute
 
-    # Build base aloha command with -y flag to auto-answer continue prompt
-    # Don't use --rdp flag as Aloha's RDP launcher uses deprecated /console flag
-    # Include AWS profile if available
-    if ($global:currentAwsProfile -and $global:currentAwsProfile -ne "manual") {
-        $Command = "aloha -i $global:awsInstance --localPort $global:localPort -f -r $global:remoteIP --remotePort $global:remotePort -y --profile $global:currentAwsProfile"
-    } else {
-        $Command = "aloha -i $global:awsInstance --localPort $global:localPort -f -r $global:remoteIP --remotePort $global:remotePort -y"
-    }
-    Write-Host "Executing: $Command" -ForegroundColor Green
+    .PARAMETER AdditionalMessage
+    Optional additional message to display in the banner (e.g., browser URL for non-RDP)
 
-    if ($IsRdp) {
-        # Ask about RDP Manager for RDP connections
-        $rdpChoice = Read-Host "Launch RDP Manager after connection? (Y/n)"
+    .OUTPUTS
+    Returns the path to the created wrapper script file
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Command,
 
-        # Create a wrapper script that keeps window open on error
-        $wrapperScript = @"
+        [Parameter(Mandatory=$false)]
+        [string]$AdditionalMessage = ""
+    )
+
+    # Build the wrapper script content
+    $wrapperScript = @"
 `$ErrorActionPreference = 'Continue'
 Write-Host ''
 Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
@@ -5904,6 +5907,19 @@ Write-Host '  When Aloha asks: Would you like to quit? (y/N)' -ForegroundColor W
 Write-Host '  → Press ENTER or type N to keep connection alive' -ForegroundColor Green
 Write-Host '  → DO NOT type Y or close this window!' -ForegroundColor Red
 Write-Host ''
+"@
+
+    # Add additional message if provided (e.g., browser URL for non-RDP connections)
+    if ($AdditionalMessage) {
+        $wrapperScript += @"
+
+Write-Host '  $AdditionalMessage' -ForegroundColor Cyan
+"@
+    }
+
+    # Add command display and execution logic
+    $wrapperScript += @"
+
 Write-Host '  Command: $Command' -ForegroundColor Gray
 Write-Host ''
 Write-Host '═══════════════════════════════════════════════════════════' -ForegroundColor Cyan
@@ -5918,9 +5934,34 @@ try {
 }
 "@
 
-        # Save wrapper script to temp file
-        $tempScript = Join-Path $env:TEMP "aloha_wrapper_$(Get-Date -Format 'yyyyMMddHHmmss').ps1"
-        $wrapperScript | Out-File -FilePath $tempScript -Encoding UTF8
+    # Save wrapper script to temp file
+    $tempScript = Join-Path $env:TEMP "aloha_wrapper_$(Get-Date -Format 'yyyyMMddHHmmss').ps1"
+    $wrapperScript | Out-File -FilePath $tempScript -Encoding UTF8
+
+    return $tempScript
+}
+
+function Start-AlohaConnection {
+    param([bool]$IsRdp = $false)
+
+    Write-Host "Connecting to $global:remoteIP via Aloha..." -ForegroundColor Green
+
+    # Build base aloha command with -y flag to auto-answer continue prompt
+    # Don't use --rdp flag as Aloha's RDP launcher uses deprecated /console flag
+    # Include AWS profile if available
+    if ($global:currentAwsProfile -and $global:currentAwsProfile -ne "manual") {
+        $Command = "aloha -i $global:awsInstance --localPort $global:localPort -f -r $global:remoteIP --remotePort $global:remotePort -y --profile $global:currentAwsProfile"
+    } else {
+        $Command = "aloha -i $global:awsInstance --localPort $global:localPort -f -r $global:remoteIP --remotePort $global:remotePort -y"
+    }
+    if ($IsRdp) {
+        # Ask about RDP Manager for RDP connections
+        $rdpChoice = Read-Host "Launch RDP Manager after connection? (Y/n)"
+
+        Write-Host "Launching Aloha in new window: $Command" -ForegroundColor Green
+
+        # Create wrapper script using helper function
+        $tempScript = New-AlohaWrapperScript -Command $Command
 
         # Launch in new PowerShell window with custom title and no profile to avoid Oh-My-Posh conflicts
         $windowTitle = "Aloha Connection - $global:remoteIP"
@@ -5975,20 +6016,17 @@ if (`$connected) {
         }
     }
     else {
-        # For web interfaces, just run the tunnel
-        Write-Host "Tunnel established. Connect via browser to: https://localhost:$global:localPort" -ForegroundColor Cyan
-        try {
-            Invoke-Expression $Command
-            $exitCode = $LASTEXITCODE
+        # For web interfaces (SSH, HTTPS, etc.), launch tunnel in new window
+        Write-Host "Launching Aloha in new window: $Command" -ForegroundColor Green
+        Write-Host "Tunnel will be established. Connect via browser to: https://localhost:$global:localPort" -ForegroundColor Cyan
 
-            if ($exitCode -ne 0) {
-                Write-Host ""
-                Write-Host "Aloha exited with error code: $exitCode" -ForegroundColor Red
-            }
-        }
-        catch {
-            Write-Host "Error running Aloha: $($_.Exception.Message)" -ForegroundColor Red
-        }
+        # Create wrapper script using helper function with browser URL message
+        $browserUrl = "Connect via browser to: https://localhost:$global:localPort"
+        $tempScript = New-AlohaWrapperScript -Command $Command -AdditionalMessage $browserUrl
+
+        # Launch in new PowerShell window with custom title and no profile to avoid Oh-My-Posh conflicts
+        $windowTitle = "Aloha Connection - $global:remoteIP"
+        Start-Process -FilePath "pwsh" -ArgumentList "-NoProfile", "-Command", "`$Host.UI.RawUI.WindowTitle = '$windowTitle'; & '$tempScript'" -WindowStyle Normal
     }
 
     # Auto-continue timer with option to press Enter
