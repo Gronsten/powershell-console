@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.9.4"
+$script:ConsoleVersion = "1.10.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -1671,11 +1671,16 @@ function Search-Packages {
                     $inTable = $true
                     continue
                 }
-                if ($inTable -and $line.Trim().Length -gt 0 -and $line -notmatch '^-+$') {
+                if ($inTable -and $line.Trim().Length -gt 0 -and $line -notmatch '^-+$' -and $line -notmatch '^\d+\s+(upgrade|package)') {
                     # Extract package ID (second column typically)
+                    # Use more robust parsing to handle various winget output formats
                     $parts = $line -split '\s{2,}' | Where-Object { $_.Trim() -ne '' }
                     if ($parts.Count -ge 2) {
-                        $installedWinget += $parts[1].Trim()
+                        # Trim and normalize the package ID (remove extra whitespace, special chars)
+                        $packageId = $parts[1].Trim() -replace '\s+$',''
+                        if ($packageId -ne '' -and $packageId -notmatch '^[\-\\/\|]') {
+                            $installedWinget += $packageId
+                        }
                     }
                 }
             }
@@ -2391,9 +2396,11 @@ function Search-Packages {
                 $parts = $line -split '\s{2,}' | Where-Object { $_.Trim() -ne '' }
                 if ($parts.Count -ge 3) {
                     $packageName = $parts[0].Trim()
-                    $packageId = $parts[1].Trim()
+                    # Normalize package ID (remove trailing whitespace, special chars)
+                    $packageId = $parts[1].Trim() -replace '\s+$',''
                     $packageVersion = $parts[2].Trim()
-                    $isInstalled = $installedWinget -contains $packageId
+                    # Robust comparison for package IDs
+                    $isInstalled = ($installedWinget | Where-Object { $_ -eq $packageId } | Select-Object -First 1) -ne $null
 
                     $wingetSearchResults += @{
                         Manager = "winget"
@@ -2661,6 +2668,175 @@ function Search-Packages {
     Write-Host ""
 }
 
+function Invoke-PackageManagerCleanup {
+    [CmdletBinding()]
+    param()
+
+    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║  PACKAGE MANAGER CLEANUP                   ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+
+    Write-Host "This will clean caches and perform maintenance for all package managers." -ForegroundColor Yellow
+    Write-Host ""
+
+    # Scoop cleanup
+    Write-Host "📦 Scoop Cleanup:" -ForegroundColor Yellow
+    Write-Host ""
+    try {
+        $scoopCmd = Get-Command scoop -ErrorAction SilentlyContinue
+        if ($scoopCmd) {
+            # Run scoop checkup
+            Write-Host "  Running scoop checkup..." -ForegroundColor Cyan
+            scoop checkup
+            Write-Host ""
+
+            # Run scoop cleanup for all apps (removes old versions)
+            Write-Host "  Cleaning up old versions..." -ForegroundColor Cyan
+            scoop cleanup * --cache
+            Write-Host ""
+
+            # Ask about wiping cache completely
+            Write-Host "  Remove cache completely (includes current installers)? (y/N): " -ForegroundColor Yellow -NoNewline
+            $wipeCacheResponse = Read-Host
+            if ($wipeCacheResponse -match '^[Yy]') {
+                Write-Host "  Removing all cached installers..." -ForegroundColor Cyan
+                scoop cache rm *
+                Write-Host "  ✅ Scoop cache cleared" -ForegroundColor Green
+            } else {
+                Write-Host "  Skipping full cache wipe" -ForegroundColor Gray
+            }
+        } else {
+            Write-Host "  ⚠️  Scoop not found" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  ⚠️  Error during Scoop cleanup: $_" -ForegroundColor Red
+    }
+    Write-Host ""
+
+    # npm cleanup
+    Write-Host "📦 npm Cleanup:" -ForegroundColor Yellow
+    Write-Host ""
+    try {
+        $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+        if ($npmCmd) {
+            # Check if npm itself needs updating
+            Write-Host "  Checking npm version..." -ForegroundColor Cyan
+            $npmVersion = npm --version 2>&1
+            Write-Host "  Current npm version: $npmVersion" -ForegroundColor Gray
+
+            Write-Host "  Update npm to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
+            $updateNpmResponse = Read-Host
+            if ($updateNpmResponse -notmatch '^[Nn]') {
+                Write-Host "  Updating npm..." -ForegroundColor Cyan
+                npm install -g npm
+                Write-Host "  ✅ npm updated" -ForegroundColor Green
+            } else {
+                Write-Host "  Skipping npm update" -ForegroundColor Gray
+            }
+            Write-Host ""
+
+            # Clean cache
+            Write-Host "  Cleaning npm cache..." -ForegroundColor Cyan
+            npm cache clean --force
+            Write-Host "  ✅ npm cache cleaned" -ForegroundColor Green
+            Write-Host ""
+
+            # Verify cache
+            Write-Host "  Verifying npm cache integrity..." -ForegroundColor Cyan
+            npm cache verify
+            Write-Host "  ✅ npm cache verified" -ForegroundColor Green
+        } else {
+            Write-Host "  ⚠️  npm not found" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  ⚠️  Error during npm cleanup: $_" -ForegroundColor Red
+    }
+    Write-Host ""
+
+    # pip cleanup
+    Write-Host "📦 pip Cleanup:" -ForegroundColor Yellow
+    Write-Host ""
+    try {
+        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($pythonCmd) {
+            # Check if pip itself needs updating
+            Write-Host "  Checking pip version..." -ForegroundColor Cyan
+            $pipVersion = python -m pip --version 2>&1
+            Write-Host "  Current pip: $pipVersion" -ForegroundColor Gray
+
+            Write-Host "  Update pip to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
+            $updatePipResponse = Read-Host
+            if ($updatePipResponse -notmatch '^[Nn]') {
+                Write-Host "  Updating pip..." -ForegroundColor Cyan
+                python -m pip install --upgrade pip
+                Write-Host "  ✅ pip updated" -ForegroundColor Green
+            } else {
+                Write-Host "  Skipping pip update" -ForegroundColor Gray
+            }
+            Write-Host ""
+
+            # Purge cache
+            Write-Host "  Purging pip cache..." -ForegroundColor Cyan
+            pip cache purge
+            Write-Host "  ✅ pip cache purged" -ForegroundColor Green
+        } else {
+            Write-Host "  ⚠️  Python/pip not found" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  ⚠️  Error during pip cleanup: $_" -ForegroundColor Red
+    }
+    Write-Host ""
+
+    # winget cleanup
+    Write-Host "📦 winget Cleanup:" -ForegroundColor Yellow
+    Write-Host ""
+    try {
+        $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+        if ($wingetCmd) {
+            # Update winget source catalogs
+            Write-Host "  Updating winget source catalogs..." -ForegroundColor Cyan
+            winget source update
+            Write-Host "  ✅ winget sources updated" -ForegroundColor Green
+            Write-Host ""
+
+            # Validate winget
+            Write-Host "  Validating winget..." -ForegroundColor Cyan
+            winget validate
+            Write-Host "  ✅ winget validated" -ForegroundColor Green
+            Write-Host ""
+
+            # Clean winget cache
+            Write-Host "  Clear winget cache? (y/N): " -ForegroundColor Yellow -NoNewline
+            $clearWingetCacheResponse = Read-Host
+            if ($clearWingetCacheResponse -match '^[Yy]') {
+                Write-Host "  Clearing winget cache..." -ForegroundColor Cyan
+                $cachePath = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\AC\INetCache"
+                if (Test-Path $cachePath) {
+                    try {
+                        Remove-Item "$cachePath\*" -Recurse -Force -ErrorAction Stop
+                        Write-Host "  ✅ winget cache cleared" -ForegroundColor Green
+                    } catch {
+                        Write-Host "  ⚠️  Error clearing cache: $_" -ForegroundColor Red
+                    }
+                } else {
+                    Write-Host "  ⚠️  Cache path not found" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "  Skipping cache clear" -ForegroundColor Gray
+            }
+        } else {
+            Write-Host "  ⚠️  winget not found" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  ⚠️  Error during winget cleanup: $_" -ForegroundColor Red
+    }
+    Write-Host ""
+
+    Write-Host "╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║  CLEANUP COMPLETE                          ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+}
+
 function Show-PackageManagerMenu {
     # Define default menu
     $defaultMenu = @(
@@ -2674,6 +2850,10 @@ function Show-PackageManagerMenu {
         }),
         (New-MenuAction "Search Packages" {
             Search-Packages
+            Invoke-StandardPause
+        }),
+        (New-MenuAction "Package Manager Cleanup" {
+            Invoke-PackageManagerCleanup
             Invoke-StandardPause
         })
     )

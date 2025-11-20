@@ -20,6 +20,51 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.10.0 (2025-11-20)
+
+**New Feature: Package Manager Cleanup + Bug Fix: Winget Search Selectability**
+
+Added comprehensive package manager cleanup functionality and fixed winget package selection bug.
+
+**New Features:**
+- **Package Manager Cleanup Menu**
+  - New "Package Manager Cleanup" option in Package Manager menu
+  - Comprehensive cleanup for Scoop, npm, pip, and winget package managers
+  - Interactive prompts for destructive operations (cache clearing, etc.)
+
+- **Scoop Cleanup**
+  - `scoop checkup` - System health check
+  - `scoop cleanup * --cache` - Remove old package versions and cache
+  - Optional full cache wipe with confirmation prompt
+
+- **npm Cleanup**
+  - Optional npm self-update to latest version
+  - `npm cache clean --force` - Clear npm cache
+  - `npm cache verify` - Verify cache integrity
+
+- **pip Cleanup**
+  - Optional pip self-update to latest version
+  - `pip cache purge` - Purge pip cache
+
+- **winget Cleanup**
+  - `winget source update` - Update winget source catalogs
+  - `winget validate` - Validate winget installation
+  - Optional cache clearing with confirmation prompt
+
+**Bug Fixes:**
+- **Winget Search Selectability Issue**
+  - Fixed bug where some winget packages weren't selectable in global search
+  - Improved package ID parsing and normalization
+  - Added robust comparison logic to handle ID format variations
+  - Filters out progress indicators and footer lines from installed package list
+  - Resolves issue reported with searches like "grape" and similar queries
+
+**Technical Details:**
+- New function: `Invoke-PackageManagerCleanup` in [console.ps1:2671-2838](console.ps1#L2671-L2838)
+- Enhanced winget installed package parsing in [console.ps1:1664-1688](console.ps1#L1664-L1688)
+- Improved winget search result parsing in [console.ps1:2394-2403](console.ps1#L2394-L2403)
+- Updated Package Manager menu in [console.ps1:2840-2859](console.ps1#L2840-L2859)
+
 ### v1.9.4 (2025-11-20)
 
 **Documentation: Animated Demo GIF**
