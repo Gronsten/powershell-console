@@ -20,6 +20,24 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.9.4 (2025-11-20)
+
+**Documentation: Animated Demo GIF**
+
+Added animated demo GIF to showcase console features and user interface.
+
+**Documentation Updates:**
+- **Demo GIF**
+  - Added `assets/demo.gif` - Animated demonstration of console launch and usage
+  - Shows terminal session starting with `pwsh console.ps1` command
+  - Demonstrates console appearance and styling
+  - Enhances README.md visual documentation
+
+**Technical Details:**
+- New file: [assets/demo.gif](assets/demo.gif)
+- Referenced in [README.md:15](README.md#L15) Demo section
+- GIF format for broad compatibility and GitHub rendering
+
 ### v1.9.3 (2025-11-19)
 
 **Enhancement: Configurable VPN Output Path**

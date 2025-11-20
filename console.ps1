@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.9.3"
+$script:ConsoleVersion = "1.9.4"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
