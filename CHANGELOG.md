@@ -34,22 +34,24 @@ Added comprehensive package manager cleanup functionality and fixed winget packa
 
 - **Scoop Cleanup**
   - `scoop checkup` - System health check
-  - `scoop cleanup * --cache` - Remove old package versions and cache
+  - `scoop cleanup * --cache` - Remove old package versions and cache (with progress suppression)
   - Optional full cache wipe with confirmation prompt
 
 - **npm Cleanup**
+  - Version comparison display (Current vs Latest)
   - Optional npm self-update to latest version
   - `npm cache clean --force` - Clear npm cache
   - `npm cache verify` - Verify cache integrity
 
 - **pip Cleanup**
+  - Version comparison display (Current vs Latest via pip index)
   - Optional pip self-update to latest version
   - `pip cache purge` - Purge pip cache
 
 - **winget Cleanup**
-  - `winget source update` - Update winget source catalogs
-  - `winget validate` - Validate winget installation
+  - `winget source update` - Update winget source catalogs (with progress suppression)
   - Optional cache clearing with confirmation prompt
+  - Note: Removed `winget validate` (requires manifest file, not applicable for general cleanup)
 
 **Bug Fixes:**
 - **Winget Search Selectability Issue**

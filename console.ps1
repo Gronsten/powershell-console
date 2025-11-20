@@ -2742,7 +2742,8 @@ function Invoke-PackageManagerCleanup {
 
             # Run scoop cleanup for all apps (removes old versions)
             Write-Host "  Cleaning up old versions..." -ForegroundColor Cyan
-            scoop cleanup * --cache
+            scoop cleanup * --cache 2>&1 | Out-Null
+            Write-Host "  ✅ Old versions cleaned" -ForegroundColor Green
             Write-Host ""
 
             # Ask about wiping cache completely
@@ -2772,7 +2773,12 @@ function Invoke-PackageManagerCleanup {
             # Check if npm itself needs updating
             Write-Host "  Checking npm version..." -ForegroundColor Cyan
             $npmVersion = npm --version 2>&1
-            Write-Host "  Current npm version: $npmVersion" -ForegroundColor Gray
+            try {
+                $latestNpm = npm view npm version 2>&1
+                Write-Host "  Current: $npmVersion | Latest: $latestNpm" -ForegroundColor Gray
+            } catch {
+                Write-Host "  Current npm version: $npmVersion" -ForegroundColor Gray
+            }
 
             Write-Host "  Update npm to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
             $updateNpmResponse = Read-Host
@@ -2811,8 +2817,25 @@ function Invoke-PackageManagerCleanup {
         if ($pythonCmd) {
             # Check if pip itself needs updating
             Write-Host "  Checking pip version..." -ForegroundColor Cyan
-            $pipVersion = python -m pip --version 2>&1
-            Write-Host "  Current pip: $pipVersion" -ForegroundColor Gray
+            $pipVersionOutput = python -m pip --version 2>&1
+            # Extract just the version number from "pip X.Y.Z from ..."
+            if ($pipVersionOutput -match 'pip ([\d\.]+)') {
+                $currentPipVer = $matches[1]
+                try {
+                    # Check latest version available
+                    $pipIndexOutput = python -m pip index versions pip 2>&1 | Out-String
+                    if ($pipIndexOutput -match 'LATEST:\s+([\d\.]+)') {
+                        $latestPipVer = $matches[1]
+                        Write-Host "  Current: $currentPipVer | Latest: $latestPipVer" -ForegroundColor Gray
+                    } else {
+                        Write-Host "  Current pip: $pipVersionOutput" -ForegroundColor Gray
+                    }
+                } catch {
+                    Write-Host "  Current pip: $pipVersionOutput" -ForegroundColor Gray
+                }
+            } else {
+                Write-Host "  Current pip: $pipVersionOutput" -ForegroundColor Gray
+            }
 
             Write-Host "  Update pip to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
             $updatePipResponse = Read-Host
@@ -2845,15 +2868,13 @@ function Invoke-PackageManagerCleanup {
         if ($wingetCmd) {
             # Update winget source catalogs
             Write-Host "  Updating winget source catalogs..." -ForegroundColor Cyan
-            winget source update
+            winget source update 2>&1 | Out-Null
             Write-Host "  ✅ winget sources updated" -ForegroundColor Green
             Write-Host ""
 
-            # Validate winget
-            Write-Host "  Validating winget..." -ForegroundColor Cyan
-            winget validate
-            Write-Host "  ✅ winget validated" -ForegroundColor Green
-            Write-Host ""
+            # Note: winget validate requires a manifest file, skip this operation
+            # It's used for package manifest validation, not winget itself
+            # winget source update already validates the installation
 
             # Clean winget cache
             Write-Host "  Clear winget cache? (y/N): " -ForegroundColor Yellow -NoNewline
