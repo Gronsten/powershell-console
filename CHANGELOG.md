@@ -20,6 +20,59 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.10.0 (2025-11-20)
+
+**New Feature: Package Manager Cleanup + Bug Fix: Winget Search Selectability**
+
+Added comprehensive package manager cleanup functionality and fixed winget package selection bug.
+
+**New Features:**
+- **Package Manager Cleanup Menu**
+  - New "Package Manager Cleanup" option in Package Manager menu
+  - Comprehensive cleanup for Scoop, npm, pip, and winget package managers
+  - Interactive prompts for destructive operations (cache clearing, etc.)
+
+- **Scoop Cleanup**
+  - `scoop checkup` - System health check
+  - `scoop cleanup * --cache` - Remove old package versions and cache (with progress suppression)
+  - Optional full cache wipe with confirmation prompt
+
+- **npm Cleanup**
+  - Version comparison display (Current vs Latest)
+  - Optional npm self-update to latest version
+  - `npm cache clean --force` - Clear npm cache
+  - `npm cache verify` - Verify cache integrity
+
+- **pip Cleanup**
+  - Version comparison display (Current vs Latest via pip index)
+  - Optional pip self-update to latest version
+  - `pip cache purge` - Purge pip cache
+
+- **winget Cleanup**
+  - `winget source update` - Update winget source catalogs (with progress suppression)
+  - Optional cache clearing with confirmation prompt
+  - Note: Removed `winget validate` (requires manifest file, not applicable for general cleanup)
+
+**Bug Fixes:**
+- **Winget Search Selectability Issue**
+  - Fixed bug where some winget packages weren't selectable in global search
+  - Changed from whitespace-based parsing to header column position-based parsing
+  - Handles dynamic column widths that vary based on search results
+  - Resolves issue with searches like "grape" (narrow columns) vs "tweak" (wide columns)
+  - Filters out progress indicators and footer lines from installed package list
+
+- **Menu Configuration Merging**
+  - Fixed issue where new menu items wouldn't appear if menu was previously customized
+  - Menu loading now merges new default items into saved configurations
+  - Ensures code updates automatically add new options to existing customized menus
+
+**Technical Details:**
+- New function: `Invoke-PackageManagerCleanup` in [console.ps1:2671-2838](console.ps1#L2671-L2838)
+- Enhanced winget column-based parsing in [console.ps1:2390-2449](console.ps1#L2390-L2449)
+- Improved menu merging in `Get-MenuFromConfig` [console.ps1:194-241](console.ps1#L194-L241)
+- Enhanced winget installed package parsing in [console.ps1:1664-1688](console.ps1#L1664-L1688)
+- Updated Package Manager menu in [console.ps1:2840-2859](console.ps1#L2840-L2859)
+
 ### v1.9.4 (2025-11-20)
 
 **Documentation: Animated Demo GIF**

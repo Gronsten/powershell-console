@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.9.4"
+$script:ConsoleVersion = "1.10.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -211,6 +211,25 @@ function Get-MenuFromConfig {
                 $menuItems += New-MenuAction $item.text ([scriptblock]::Create($item.action))
             } else {
                 $menuItems += $item.text
+            }
+        }
+
+        # Check if default menu has new items not in saved config
+        # This handles cases where code updates add new menu options
+        foreach ($defaultItem in $DefaultMenuItems) {
+            $defaultText = $defaultItem.Text
+            $existsInSaved = $false
+
+            foreach ($savedItem in $savedMenu) {
+                if ($savedItem.text -eq $defaultText) {
+                    $existsInSaved = $true
+                    break
+                }
+            }
+
+            # If default item doesn't exist in saved menu, append it
+            if (-not $existsInSaved) {
+                $menuItems += $defaultItem
             }
         }
 
@@ -1671,11 +1690,16 @@ function Search-Packages {
                     $inTable = $true
                     continue
                 }
-                if ($inTable -and $line.Trim().Length -gt 0 -and $line -notmatch '^-+$') {
+                if ($inTable -and $line.Trim().Length -gt 0 -and $line -notmatch '^-+$' -and $line -notmatch '^\d+\s+(upgrade|package)') {
                     # Extract package ID (second column typically)
+                    # Use more robust parsing to handle various winget output formats
                     $parts = $line -split '\s{2,}' | Where-Object { $_.Trim() -ne '' }
                     if ($parts.Count -ge 2) {
-                        $installedWinget += $parts[1].Trim()
+                        # Trim and normalize the package ID (remove extra whitespace, special chars)
+                        $packageId = $parts[1].Trim() -replace '\s+$',''
+                        if ($packageId -ne '' -and $packageId -notmatch '^[\-\\/\|]') {
+                            $installedWinget += $packageId
+                        }
                     }
                 }
             }
@@ -1728,7 +1752,7 @@ function Search-Packages {
                 $scoopSearchResults = @()
 
                 foreach ($line in $scoopLines) {
-                    # Skip header lines
+                    # Skip header lines and empty lines
                     if ($line -match "^'.*'.*bucket" -or
                         $line -match "^Results from" -or
                         $line -match "^Name\s+Version\s+Source" -or
@@ -1738,12 +1762,26 @@ function Search-Packages {
                         continue
                     }
 
-                    # Parse package info from line (format: "name version (bucket)")
+                    # Try multiple parsing patterns for scoop search output
+                    $pkgName = $null
+                    $pkgVersion = $null
+                    $pkgBucket = $null
+
+                    # Pattern 1: "name version (bucket)" - with parentheses
                     if ($line -match '^\s*(\S+)\s+(\S+)\s+\((\S+)\)') {
                         $pkgName = $matches[1]
                         $pkgVersion = $matches[2]
                         $pkgBucket = $matches[3]
+                    }
+                    # Pattern 2: "name version bucket" - space-separated (newer scoop format)
+                    elseif ($line -match '^\s*(\S+)\s+(\S+)\s+(\S+)\s*$') {
+                        $pkgName = $matches[1]
+                        $pkgVersion = $matches[2]
+                        $pkgBucket = $matches[3]
+                    }
 
+                    # If we successfully parsed a package
+                    if ($pkgName) {
                         $isInstalled = $false
                         foreach ($pkg in $installedScoop) {
                             if ($pkgName -eq $pkg) {
@@ -1770,21 +1808,28 @@ function Search-Packages {
                 Write-Host "  Found $($scoopSearchResults.Count) package(s)" -ForegroundColor Cyan
                 Write-Host ""
 
-                # Count packages available for installation (non-installed)
-                $availableCount = ($scoopSearchResults | Where-Object { -not $_.Installed }).Count
-                $installedCount = ($scoopSearchResults | Where-Object { $_.Installed }).Count
-
-                if ($installedCount -gt 0) {
-                    Write-Host "  $installedCount package(s) already installed (shown in gray)" -ForegroundColor Gray
-                }
-                if ($availableCount -eq 0) {
-                    Write-Host "  All matching packages are already installed!" -ForegroundColor Green
+                # Always show results, even if all are installed
+                if ($scoopSearchResults.Count -eq 0) {
+                    Write-Host "  No packages found to install" -ForegroundColor Gray
                 } else {
-                    Write-Host "  $availableCount package(s) available to install" -ForegroundColor Cyan
-                    Write-Host "  Select packages to install using the interactive menu..." -ForegroundColor Gray
-                    Write-Host ""
+                    # Count packages available for installation (non-installed)
+                    $availableCount = ($scoopSearchResults | Where-Object { -not $_.Installed }).Count
+                    $installedCount = ($scoopSearchResults | Where-Object { $_.Installed }).Count
 
-                    # Show interactive selection (includes all packages, but installed ones are unselectable)
+                    if ($installedCount -gt 0) {
+                        Write-Host "  $installedCount package(s) already installed (shown in gray in selection menu)" -ForegroundColor Gray
+                    }
+                    if ($availableCount -eq 0 -and $installedCount -gt 0) {
+                        Write-Host "  All matching packages are already installed!" -ForegroundColor Green
+                        Write-Host "  Showing anyway for reference..." -ForegroundColor Gray
+                        Write-Host ""
+                    } elseif ($availableCount -gt 0) {
+                        Write-Host "  $availableCount package(s) available to install" -ForegroundColor Cyan
+                        Write-Host "  Select packages to install using the interactive menu..." -ForegroundColor Gray
+                        Write-Host ""
+                    }
+
+                    # Show interactive selection even if all are installed (for reference)
                     $selectedPackages = Show-CheckboxSelection -Items $scoopSearchResults -Title "SELECT SCOOP PACKAGES TO INSTALL"
 
                     if ($selectedPackages -and $selectedPackages.Count -gt 0) {
@@ -2382,31 +2427,64 @@ function Search-Packages {
                 }
             }
 
-            # Parse data lines into structured objects
+            # Parse data lines into structured objects using header column positions
             $wingetSearchResults = @()
             $sortedDataLines = $dataLines | Sort-Object
 
-            foreach ($line in $sortedDataLines) {
-                # Extract package information (Name, Id, Version)
-                $parts = $line -split '\s{2,}' | Where-Object { $_.Trim() -ne '' }
-                if ($parts.Count -ge 3) {
-                    $packageName = $parts[0].Trim()
-                    $packageId = $parts[1].Trim()
-                    $packageVersion = $parts[2].Trim()
-                    $isInstalled = $installedWinget -contains $packageId
+            # Determine column positions from header line
+            $namePos = $headerLine.IndexOf("Name")
+            $idPos = $headerLine.IndexOf("Id")
+            $versionPos = $headerLine.IndexOf("Version")
 
-                    $wingetSearchResults += @{
-                        Manager = "winget"
-                        Name = $packageId
-                        DisplayName = $packageName
-                        Version = $packageVersion
-                        Installed = $isInstalled
-                        DisplayText = if ($isInstalled) {
-                            "$packageName - $packageId ($packageVersion) [INSTALLED]"
-                        } else {
-                            "$packageName - $packageId ($packageVersion)"
+            foreach ($line in $sortedDataLines) {
+                try {
+                    # Use header positions to extract columns (more reliable than splitting on spaces)
+                    # Extract Name (from start to Id column)
+                    $packageName = if ($idPos -gt $namePos) {
+                        $line.Substring($namePos, $idPos - $namePos).Trim()
+                    } else { "" }
+
+                    # Extract Id (from Id column to Version column)
+                    $packageId = if ($versionPos -gt $idPos) {
+                        $line.Substring($idPos, $versionPos - $idPos).Trim()
+                    } else { "" }
+
+                    # Extract Version (from Version column to end, or to Match column if it exists)
+                    $matchPos = $headerLine.IndexOf("Match")
+                    $sourcePos = $headerLine.IndexOf("Source")
+                    $versionEndPos = if ($matchPos -gt $versionPos) {
+                        $matchPos
+                    } elseif ($sourcePos -gt $versionPos) {
+                        $sourcePos
+                    } else {
+                        $line.Length
+                    }
+
+                    $packageVersion = if ($versionEndPos -gt $versionPos -and $versionPos -lt $line.Length) {
+                        $line.Substring($versionPos, [Math]::Min($versionEndPos - $versionPos, $line.Length - $versionPos)).Trim()
+                    } else { "" }
+
+                    # Only add if we have at minimum a package ID
+                    if ($packageId -ne "") {
+                        # Robust comparison for package IDs
+                        $isInstalled = ($installedWinget | Where-Object { $_ -eq $packageId } | Select-Object -First 1) -ne $null
+
+                        $wingetSearchResults += @{
+                            Manager = "winget"
+                            Name = $packageId
+                            DisplayName = $packageName
+                            Version = $packageVersion
+                            Installed = $isInstalled
+                            DisplayText = if ($isInstalled) {
+                                "$packageName - $packageId ($packageVersion) [INSTALLED]"
+                            } else {
+                                "$packageName - $packageId ($packageVersion)"
+                            }
                         }
                     }
+                } catch {
+                    # Skip lines that can't be parsed
+                    continue
                 }
             }
 
@@ -2661,6 +2739,230 @@ function Search-Packages {
     Write-Host ""
 }
 
+function Invoke-PackageManagerCleanup {
+    [CmdletBinding()]
+    param()
+
+    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║  PACKAGE MANAGER CLEANUP                   ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+
+    Write-Host "This will clean caches and perform maintenance for all package managers." -ForegroundColor Yellow
+    Write-Host ""
+
+    # Scoop cleanup
+    Write-Host "📦 Scoop Cleanup:" -ForegroundColor Yellow
+    Write-Host ""
+    try {
+        $scoopCmd = Get-Command scoop -ErrorAction SilentlyContinue
+        if ($scoopCmd) {
+            # Run scoop checkup
+            Write-Host "  Running scoop checkup..." -ForegroundColor Cyan
+            scoop checkup
+            Write-Host ""
+
+            # Run scoop cleanup for all apps (removes old versions)
+            Write-Host "  Cleaning up old versions..." -ForegroundColor Cyan
+            scoop cleanup * --cache 2>&1 | Out-Null
+            Write-Host "  ✅ Old versions cleaned" -ForegroundColor Green
+            Write-Host ""
+
+            # Ask about wiping cache completely
+            Write-Host "  Remove cache completely (includes current installers)? (y/N): " -ForegroundColor Yellow -NoNewline
+            $wipeCacheResponse = Read-Host
+            if ($wipeCacheResponse -match '^[Yy]') {
+                Write-Host "  Removing all cached installers..." -ForegroundColor Cyan
+                scoop cache rm *
+                Write-Host "  ✅ Scoop cache cleared" -ForegroundColor Green
+            } else {
+                Write-Host "  Skipping full cache wipe" -ForegroundColor Gray
+            }
+        } else {
+            Write-Host "  ⚠️  Scoop not found" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  ⚠️  Error during Scoop cleanup: $_" -ForegroundColor Red
+    }
+    Write-Host ""
+
+    # npm cleanup
+    Write-Host "📦 npm Cleanup:" -ForegroundColor Yellow
+    Write-Host ""
+    try {
+        $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+        if ($npmCmd) {
+            # Check if npm itself needs updating
+            Write-Host "  Checking npm version..." -ForegroundColor Cyan
+            $npmVersion = npm --version 2>&1
+            $npmNeedsUpdate = $false
+            try {
+                $latestNpm = npm view npm version 2>&1
+                Write-Host "  Current: $npmVersion | Latest: $latestNpm" -ForegroundColor Gray
+
+                # Check if versions differ
+                if ($npmVersion -ne $latestNpm) {
+                    $npmNeedsUpdate = $true
+                }
+            } catch {
+                Write-Host "  Current npm version: $npmVersion" -ForegroundColor Gray
+                $npmNeedsUpdate = $true  # Assume update needed if we can't check
+            }
+
+            # Note about Scoop management
+            $scoopNodejs = Get-Command scoop -ErrorAction SilentlyContinue
+            if ($scoopNodejs) {
+                Write-Host "  Note: npm is bundled with nodejs-lts (Scoop)" -ForegroundColor DarkGray
+                Write-Host "        Updates may be overwritten by Scoop updates" -ForegroundColor DarkGray
+            }
+
+            if ($npmNeedsUpdate) {
+                Write-Host "  Update npm to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
+                $updateNpmResponse = Read-Host
+                if ($updateNpmResponse -notmatch '^[Nn]') {
+                    Write-Host "  Updating npm..." -ForegroundColor Cyan
+                    npm install -g npm
+                    Write-Host "  ✅ npm updated" -ForegroundColor Green
+                } else {
+                    Write-Host "  Skipping npm update" -ForegroundColor Gray
+                }
+            } else {
+                Write-Host "  ✅ npm is already up to date" -ForegroundColor Green
+            }
+            Write-Host ""
+
+            # Clean cache
+            Write-Host "  Cleaning npm cache..." -ForegroundColor Cyan
+            npm cache clean --force
+            Write-Host "  ✅ npm cache cleaned" -ForegroundColor Green
+            Write-Host ""
+
+            # Verify cache
+            Write-Host "  Verifying npm cache integrity..." -ForegroundColor Cyan
+            npm cache verify
+            Write-Host "  ✅ npm cache verified" -ForegroundColor Green
+        } else {
+            Write-Host "  ⚠️  npm not found" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  ⚠️  Error during npm cleanup: $_" -ForegroundColor Red
+    }
+    Write-Host ""
+
+    # pip cleanup
+    Write-Host "📦 pip Cleanup:" -ForegroundColor Yellow
+    Write-Host ""
+    try {
+        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($pythonCmd) {
+            # Check if pip itself needs updating
+            Write-Host "  Checking pip version..." -ForegroundColor Cyan
+            $pipVersionOutput = python -m pip --version 2>&1 | Out-String
+            $pipNeedsUpdate = $false
+            $currentPipVer = ""
+            $latestPipVer = ""
+
+            # Extract just the version number from "pip X.Y.Z from ..."
+            if ($pipVersionOutput -match 'pip ([\d\.]+)') {
+                $currentPipVer = $matches[1]
+                try {
+                    # Check latest version available
+                    $pipIndexOutput = python -m pip index versions pip 2>&1 | Out-String
+                    if ($pipIndexOutput -match 'LATEST:\s+([\d\.]+)') {
+                        $latestPipVer = $matches[1]
+                        Write-Host "  Current: $currentPipVer | Latest: $latestPipVer" -ForegroundColor Gray
+
+                        # Check if versions differ
+                        if ($currentPipVer -ne $latestPipVer) {
+                            $pipNeedsUpdate = $true
+                        }
+                    } else {
+                        Write-Host "  Current: $currentPipVer" -ForegroundColor Gray
+                        $pipNeedsUpdate = $true  # Assume update needed if we can't check latest
+                    }
+                } catch {
+                    Write-Host "  Current: $currentPipVer" -ForegroundColor Gray
+                    $pipNeedsUpdate = $true  # Assume update needed if check fails
+                }
+            } else {
+                Write-Host "  Current pip: $pipVersionOutput" -ForegroundColor Gray
+                $pipNeedsUpdate = $true  # Assume update needed if we can't parse version
+            }
+
+            if ($pipNeedsUpdate) {
+                Write-Host "  Update pip to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
+                $updatePipResponse = Read-Host
+                if ($updatePipResponse -notmatch '^[Nn]') {
+                    Write-Host "  Updating pip..." -ForegroundColor Cyan
+                    python -m pip install --upgrade pip
+                    Write-Host "  ✅ pip updated" -ForegroundColor Green
+                } else {
+                    Write-Host "  Skipping pip update" -ForegroundColor Gray
+                }
+            } else {
+                Write-Host "  ✅ pip is already up to date" -ForegroundColor Green
+            }
+            Write-Host ""
+
+            # Purge cache
+            Write-Host "  Purging pip cache..." -ForegroundColor Cyan
+            pip cache purge
+            Write-Host "  ✅ pip cache purged" -ForegroundColor Green
+        } else {
+            Write-Host "  ⚠️  Python/pip not found" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  ⚠️  Error during pip cleanup: $_" -ForegroundColor Red
+    }
+    Write-Host ""
+
+    # winget cleanup
+    Write-Host "📦 winget Cleanup:" -ForegroundColor Yellow
+    Write-Host ""
+    try {
+        $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+        if ($wingetCmd) {
+            # Update winget source catalogs
+            Write-Host "  Updating winget source catalogs..." -ForegroundColor Cyan
+            winget source update 2>&1 | Out-Null
+            Write-Host "  ✅ winget sources updated" -ForegroundColor Green
+            Write-Host ""
+
+            # Note: winget validate requires a manifest file, skip this operation
+            # It's used for package manifest validation, not winget itself
+            # winget source update already validates the installation
+
+            # Clean winget cache
+            Write-Host "  Clear winget cache? (y/N): " -ForegroundColor Yellow -NoNewline
+            $clearWingetCacheResponse = Read-Host
+            if ($clearWingetCacheResponse -match '^[Yy]') {
+                Write-Host "  Clearing winget cache..." -ForegroundColor Cyan
+                $cachePath = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\AC\INetCache"
+                if (Test-Path $cachePath) {
+                    try {
+                        Remove-Item "$cachePath\*" -Recurse -Force -ErrorAction Stop
+                        Write-Host "  ✅ winget cache cleared" -ForegroundColor Green
+                    } catch {
+                        Write-Host "  ⚠️  Error clearing cache: $_" -ForegroundColor Red
+                    }
+                } else {
+                    Write-Host "  ⚠️  Cache path not found" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "  Skipping cache clear" -ForegroundColor Gray
+            }
+        } else {
+            Write-Host "  ⚠️  winget not found" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  ⚠️  Error during winget cleanup: $_" -ForegroundColor Red
+    }
+    Write-Host ""
+
+    Write-Host "╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║  CLEANUP COMPLETE                          ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+}
+
 function Show-PackageManagerMenu {
     # Define default menu
     $defaultMenu = @(
@@ -2674,6 +2976,10 @@ function Show-PackageManagerMenu {
         }),
         (New-MenuAction "Search Packages" {
             Search-Packages
+            Invoke-StandardPause
+        }),
+        (New-MenuAction "Package Manager Cleanup" {
+            Invoke-PackageManagerCleanup
             Invoke-StandardPause
         })
     )
