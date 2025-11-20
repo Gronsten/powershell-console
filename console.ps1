@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.9.2"
+$script:ConsoleVersion = "1.9.3"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -6147,7 +6147,13 @@ function Get-FortiGateConfigs {
     }
 
     # Create output directory for configs
-    $configOutputDir = Join-Path $PSScriptRoot "vpn_output"
+    # Use configured path if available, otherwise fall back to script directory
+    if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and $script:Config.paths.vpnOutputPath) {
+        $configOutputDir = $script:Config.paths.vpnOutputPath
+    } else {
+        # Fallback to script directory for backward compatibility
+        $configOutputDir = Join-Path $PSScriptRoot "vpn_output"
+    }
 
     if (-not (Test-Path $configOutputDir)) {
         New-Item -ItemType Directory -Path $configOutputDir -Force | Out-Null

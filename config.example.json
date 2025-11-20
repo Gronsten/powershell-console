@@ -8,7 +8,8 @@
     "backupSource": "C:\\AppInstall\\",
     "backupDestination": "OneDrive - Company Name\\DevBackups",
     "backupLogFile": "backup-log.txt",
-    "devRoot": "C:\\path\\to\\dev"
+    "devRoot": "C:\\path\\to\\dev",
+    "vpnOutputPath": "C:\\path\\to\\vpn_output"
   },
   "defaultConnection": {
     "instance": "",
