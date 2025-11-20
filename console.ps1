@@ -214,6 +214,25 @@ function Get-MenuFromConfig {
             }
         }
 
+        # Check if default menu has new items not in saved config
+        # This handles cases where code updates add new menu options
+        foreach ($defaultItem in $DefaultMenuItems) {
+            $defaultText = $defaultItem.Text
+            $existsInSaved = $false
+
+            foreach ($savedItem in $savedMenu) {
+                if ($savedItem.text -eq $defaultText) {
+                    $existsInSaved = $true
+                    break
+                }
+            }
+
+            # If default item doesn't exist in saved menu, append it
+            if (-not $existsInSaved) {
+                $menuItems += $defaultItem
+            }
+        }
+
         return $menuItems
     }
 
@@ -2387,33 +2406,64 @@ function Search-Packages {
                 }
             }
 
-            # Parse data lines into structured objects
+            # Parse data lines into structured objects using header column positions
             $wingetSearchResults = @()
             $sortedDataLines = $dataLines | Sort-Object
 
-            foreach ($line in $sortedDataLines) {
-                # Extract package information (Name, Id, Version)
-                $parts = $line -split '\s{2,}' | Where-Object { $_.Trim() -ne '' }
-                if ($parts.Count -ge 3) {
-                    $packageName = $parts[0].Trim()
-                    # Normalize package ID (remove trailing whitespace, special chars)
-                    $packageId = $parts[1].Trim() -replace '\s+$',''
-                    $packageVersion = $parts[2].Trim()
-                    # Robust comparison for package IDs
-                    $isInstalled = ($installedWinget | Where-Object { $_ -eq $packageId } | Select-Object -First 1) -ne $null
+            # Determine column positions from header line
+            $namePos = $headerLine.IndexOf("Name")
+            $idPos = $headerLine.IndexOf("Id")
+            $versionPos = $headerLine.IndexOf("Version")
 
-                    $wingetSearchResults += @{
-                        Manager = "winget"
-                        Name = $packageId
-                        DisplayName = $packageName
-                        Version = $packageVersion
-                        Installed = $isInstalled
-                        DisplayText = if ($isInstalled) {
-                            "$packageName - $packageId ($packageVersion) [INSTALLED]"
-                        } else {
-                            "$packageName - $packageId ($packageVersion)"
+            foreach ($line in $sortedDataLines) {
+                try {
+                    # Use header positions to extract columns (more reliable than splitting on spaces)
+                    # Extract Name (from start to Id column)
+                    $packageName = if ($idPos -gt $namePos) {
+                        $line.Substring($namePos, $idPos - $namePos).Trim()
+                    } else { "" }
+
+                    # Extract Id (from Id column to Version column)
+                    $packageId = if ($versionPos -gt $idPos) {
+                        $line.Substring($idPos, $versionPos - $idPos).Trim()
+                    } else { "" }
+
+                    # Extract Version (from Version column to end, or to Match column if it exists)
+                    $matchPos = $headerLine.IndexOf("Match")
+                    $sourcePos = $headerLine.IndexOf("Source")
+                    $versionEndPos = if ($matchPos -gt $versionPos) {
+                        $matchPos
+                    } elseif ($sourcePos -gt $versionPos) {
+                        $sourcePos
+                    } else {
+                        $line.Length
+                    }
+
+                    $packageVersion = if ($versionEndPos -gt $versionPos -and $versionPos -lt $line.Length) {
+                        $line.Substring($versionPos, [Math]::Min($versionEndPos - $versionPos, $line.Length - $versionPos)).Trim()
+                    } else { "" }
+
+                    # Only add if we have at minimum a package ID
+                    if ($packageId -ne "") {
+                        # Robust comparison for package IDs
+                        $isInstalled = ($installedWinget | Where-Object { $_ -eq $packageId } | Select-Object -First 1) -ne $null
+
+                        $wingetSearchResults += @{
+                            Manager = "winget"
+                            Name = $packageId
+                            DisplayName = $packageName
+                            Version = $packageVersion
+                            Installed = $isInstalled
+                            DisplayText = if ($isInstalled) {
+                                "$packageName - $packageId ($packageVersion) [INSTALLED]"
+                            } else {
+                                "$packageName - $packageId ($packageVersion)"
+                            }
                         }
                     }
+                } catch {
+                    # Skip lines that can't be parsed
+                    continue
                 }
             }
 

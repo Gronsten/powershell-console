@@ -54,15 +54,21 @@ Added comprehensive package manager cleanup functionality and fixed winget packa
 **Bug Fixes:**
 - **Winget Search Selectability Issue**
   - Fixed bug where some winget packages weren't selectable in global search
-  - Improved package ID parsing and normalization
-  - Added robust comparison logic to handle ID format variations
+  - Changed from whitespace-based parsing to header column position-based parsing
+  - Handles dynamic column widths that vary based on search results
+  - Resolves issue with searches like "grape" (narrow columns) vs "tweak" (wide columns)
   - Filters out progress indicators and footer lines from installed package list
-  - Resolves issue reported with searches like "grape" and similar queries
+
+- **Menu Configuration Merging**
+  - Fixed issue where new menu items wouldn't appear if menu was previously customized
+  - Menu loading now merges new default items into saved configurations
+  - Ensures code updates automatically add new options to existing customized menus
 
 **Technical Details:**
 - New function: `Invoke-PackageManagerCleanup` in [console.ps1:2671-2838](console.ps1#L2671-L2838)
+- Enhanced winget column-based parsing in [console.ps1:2390-2449](console.ps1#L2390-L2449)
+- Improved menu merging in `Get-MenuFromConfig` [console.ps1:194-241](console.ps1#L194-L241)
 - Enhanced winget installed package parsing in [console.ps1:1664-1688](console.ps1#L1664-L1688)
-- Improved winget search result parsing in [console.ps1:2394-2403](console.ps1#L2394-L2403)
 - Updated Package Manager menu in [console.ps1:2840-2859](console.ps1#L2840-L2859)
 
 ### v1.9.4 (2025-11-20)
