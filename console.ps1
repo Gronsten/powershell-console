@@ -2773,21 +2773,39 @@ function Invoke-PackageManagerCleanup {
             # Check if npm itself needs updating
             Write-Host "  Checking npm version..." -ForegroundColor Cyan
             $npmVersion = npm --version 2>&1
+            $npmNeedsUpdate = $false
             try {
                 $latestNpm = npm view npm version 2>&1
                 Write-Host "  Current: $npmVersion | Latest: $latestNpm" -ForegroundColor Gray
+
+                # Check if versions differ
+                if ($npmVersion -ne $latestNpm) {
+                    $npmNeedsUpdate = $true
+                }
             } catch {
                 Write-Host "  Current npm version: $npmVersion" -ForegroundColor Gray
+                $npmNeedsUpdate = $true  # Assume update needed if we can't check
             }
 
-            Write-Host "  Update npm to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
-            $updateNpmResponse = Read-Host
-            if ($updateNpmResponse -notmatch '^[Nn]') {
-                Write-Host "  Updating npm..." -ForegroundColor Cyan
-                npm install -g npm
-                Write-Host "  ✅ npm updated" -ForegroundColor Green
+            # Note about Scoop management
+            $scoopNodejs = Get-Command scoop -ErrorAction SilentlyContinue
+            if ($scoopNodejs) {
+                Write-Host "  Note: npm is bundled with nodejs-lts (Scoop)" -ForegroundColor DarkGray
+                Write-Host "        Updates may be overwritten by Scoop updates" -ForegroundColor DarkGray
+            }
+
+            if ($npmNeedsUpdate) {
+                Write-Host "  Update npm to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
+                $updateNpmResponse = Read-Host
+                if ($updateNpmResponse -notmatch '^[Nn]') {
+                    Write-Host "  Updating npm..." -ForegroundColor Cyan
+                    npm install -g npm
+                    Write-Host "  ✅ npm updated" -ForegroundColor Green
+                } else {
+                    Write-Host "  Skipping npm update" -ForegroundColor Gray
+                }
             } else {
-                Write-Host "  Skipping npm update" -ForegroundColor Gray
+                Write-Host "  ✅ npm is already up to date" -ForegroundColor Green
             }
             Write-Host ""
 
@@ -2818,6 +2836,10 @@ function Invoke-PackageManagerCleanup {
             # Check if pip itself needs updating
             Write-Host "  Checking pip version..." -ForegroundColor Cyan
             $pipVersionOutput = python -m pip --version 2>&1 | Out-String
+            $pipNeedsUpdate = $false
+            $currentPipVer = ""
+            $latestPipVer = ""
+
             # Extract just the version number from "pip X.Y.Z from ..."
             if ($pipVersionOutput -match 'pip ([\d\.]+)') {
                 $currentPipVer = $matches[1]
@@ -2827,24 +2849,36 @@ function Invoke-PackageManagerCleanup {
                     if ($pipIndexOutput -match 'LATEST:\s+([\d\.]+)') {
                         $latestPipVer = $matches[1]
                         Write-Host "  Current: $currentPipVer | Latest: $latestPipVer" -ForegroundColor Gray
+
+                        # Check if versions differ
+                        if ($currentPipVer -ne $latestPipVer) {
+                            $pipNeedsUpdate = $true
+                        }
                     } else {
                         Write-Host "  Current: $currentPipVer" -ForegroundColor Gray
+                        $pipNeedsUpdate = $true  # Assume update needed if we can't check latest
                     }
                 } catch {
                     Write-Host "  Current: $currentPipVer" -ForegroundColor Gray
+                    $pipNeedsUpdate = $true  # Assume update needed if check fails
                 }
             } else {
                 Write-Host "  Current pip: $pipVersionOutput" -ForegroundColor Gray
+                $pipNeedsUpdate = $true  # Assume update needed if we can't parse version
             }
 
-            Write-Host "  Update pip to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
-            $updatePipResponse = Read-Host
-            if ($updatePipResponse -notmatch '^[Nn]') {
-                Write-Host "  Updating pip..." -ForegroundColor Cyan
-                python -m pip install --upgrade pip
-                Write-Host "  ✅ pip updated" -ForegroundColor Green
+            if ($pipNeedsUpdate) {
+                Write-Host "  Update pip to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
+                $updatePipResponse = Read-Host
+                if ($updatePipResponse -notmatch '^[Nn]') {
+                    Write-Host "  Updating pip..." -ForegroundColor Cyan
+                    python -m pip install --upgrade pip
+                    Write-Host "  ✅ pip updated" -ForegroundColor Green
+                } else {
+                    Write-Host "  Skipping pip update" -ForegroundColor Gray
+                }
             } else {
-                Write-Host "  Skipping pip update" -ForegroundColor Gray
+                Write-Host "  ✅ pip is already up to date" -ForegroundColor Green
             }
             Write-Host ""
 
