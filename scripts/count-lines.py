@@ -287,7 +287,7 @@ if __name__ == '__main__':
             print("="*80)
             sys.exit(0)
     else:
-        # Default to C:\AppInstall\dev
+        # Default to devRoot from config.json
         base_path = dev_root
 
     count_project_lines(base_path, dev_root)

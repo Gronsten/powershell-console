@@ -38,7 +38,7 @@ $script:CredentialsFileLastModified = $null
     Path to the powershell-console config.json file.
 
 .EXAMPLE
-    Initialize-AwsPromptIndicator -ConfigPath "C:\AppInstall\dev\powershell-console\config.json"
+    Initialize-AwsPromptIndicator -ConfigPath "/root/AppInstall/dev/powershell-console/config.json"
 #>
 function Initialize-AwsPromptIndicator {
     [CmdletBinding()]
@@ -389,11 +389,11 @@ function Get-AwsPromptIndicator {
     Optional path to oh-my-posh theme. If not provided, oh-my-posh initialization is skipped.
 
 .EXAMPLE
-    Enable-AwsPromptIndicator -ConfigPath "C:\AppInstall\dev\powershell-console\config.json" -OhMyPoshTheme "C:\AppInstall\dev\powershell-console\modules\aws-prompt-indicator\quick-term-aws.omp.json"
+    Enable-AwsPromptIndicator -ConfigPath "/root/AppInstall/dev/powershell-console/config.json" -OhMyPoshTheme "/root/AppInstall/dev/powershell-console/modules/aws-prompt-indicator/quick-term-aws.omp.json"
 
 .EXAMPLE
     # Without oh-my-posh (if you initialize it separately)
-    Enable-AwsPromptIndicator -ConfigPath "C:\AppInstall\dev\powershell-console\config.json"
+    Enable-AwsPromptIndicator -ConfigPath "/root/AppInstall/dev/powershell-console/config.json"
 #>
 function Enable-AwsPromptIndicator {
     [CmdletBinding()]
