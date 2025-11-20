@@ -75,7 +75,7 @@ The module will match the current directory or any parent directory in the tree.
 Account IDs are available in your `config.json` under the `environments` section:
 
 ```json
-"myprojectprod": {
+"acmeprod": {
   "accountId": "123456789012"
 }
 ```
