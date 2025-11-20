@@ -1,7 +1,7 @@
 # PowerShell Console - Architecture Guide
 
-**Version:** 1.9.3
-**Last Updated:** 2025-11-19
+**Version:** 1.10.0
+**Last Updated:** 2025-11-20
 **Purpose:** Technical architecture reference for Claude AI assistant sessions
 
 ---
@@ -368,7 +368,15 @@ Save-Menu -MenuTitle "Main Menu" -MenuItems $items
 
 Get-MenuFromConfig -MenuTitle "Main Menu" -DefaultMenuItems $defaults
 # Loads from config.json or returns defaults
+# IMPORTANT (v1.10.0+): Merges new default items into saved configs
+# This ensures code updates automatically add new menu options
 ```
+
+**Menu Merging Behavior (v1.10.0+)**:
+- If menu exists in config.json: Loads saved menu + merges any new default items
+- New items from code updates are automatically appended to customized menus
+- Prevents new features from being hidden when menu is customized
+- Example: "Package Manager Cleanup" added in v1.10.0 appears even if menu was customized in v1.9.x
 
 **Menu Position Memory:**
 ```powershell
