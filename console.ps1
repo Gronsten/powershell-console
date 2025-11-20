@@ -2817,7 +2817,7 @@ function Invoke-PackageManagerCleanup {
         if ($pythonCmd) {
             # Check if pip itself needs updating
             Write-Host "  Checking pip version..." -ForegroundColor Cyan
-            $pipVersionOutput = python -m pip --version 2>&1
+            $pipVersionOutput = python -m pip --version 2>&1 | Out-String
             # Extract just the version number from "pip X.Y.Z from ..."
             if ($pipVersionOutput -match 'pip ([\d\.]+)') {
                 $currentPipVer = $matches[1]
@@ -2828,10 +2828,10 @@ function Invoke-PackageManagerCleanup {
                         $latestPipVer = $matches[1]
                         Write-Host "  Current: $currentPipVer | Latest: $latestPipVer" -ForegroundColor Gray
                     } else {
-                        Write-Host "  Current pip: $pipVersionOutput" -ForegroundColor Gray
+                        Write-Host "  Current: $currentPipVer" -ForegroundColor Gray
                     }
                 } catch {
-                    Write-Host "  Current pip: $pipVersionOutput" -ForegroundColor Gray
+                    Write-Host "  Current: $currentPipVer" -ForegroundColor Gray
                 }
             } else {
                 Write-Host "  Current pip: $pipVersionOutput" -ForegroundColor Gray
