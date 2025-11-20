@@ -20,6 +20,29 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.9.3 (2025-11-19)
+
+**Enhancement: Configurable VPN Output Path**
+
+Added configurable path for VPN configuration output, replacing hardcoded script-relative directory.
+
+**Config Changes Required:**
+- Added `paths.vpnOutputPath` (string) - Directory for VPN configuration file output
+- Example: `"vpnOutputPath": "C:\\path\\to\\vpn_output"`
+- **Backward compatible** - Falls back to script directory if not configured
+
+**Enhancements:**
+- **VPN Output Directory**
+  - VPN configurations now save to configurable path from `config.json`
+  - Replaces hardcoded `$PSScriptRoot\vpn_output` with `paths.vpnOutputPath`
+  - Maintains backward compatibility with fallback to script directory
+  - Allows organizing VPN configs in user-preferred location
+
+**Technical Details:**
+- Updated `Get-VpnConnections` function in [console.ps1:6149-6160](console.ps1#L6149-L6160)
+- Added `vpnOutputPath` to config schema in [config.example.json:12](config.example.json#L12)
+- Checks for config property before using, gracefully falls back for existing configs
+
 ### v1.9.2 (2025-11-19)
 
 **Bug Fix: Alohomora Non-RDP Window Launch**
