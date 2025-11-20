@@ -1752,7 +1752,7 @@ function Search-Packages {
                 $scoopSearchResults = @()
 
                 foreach ($line in $scoopLines) {
-                    # Skip header lines
+                    # Skip header lines and empty lines
                     if ($line -match "^'.*'.*bucket" -or
                         $line -match "^Results from" -or
                         $line -match "^Name\s+Version\s+Source" -or
@@ -1762,12 +1762,26 @@ function Search-Packages {
                         continue
                     }
 
-                    # Parse package info from line (format: "name version (bucket)")
+                    # Try multiple parsing patterns for scoop search output
+                    $pkgName = $null
+                    $pkgVersion = $null
+                    $pkgBucket = $null
+
+                    # Pattern 1: "name version (bucket)" - with parentheses
                     if ($line -match '^\s*(\S+)\s+(\S+)\s+\((\S+)\)') {
                         $pkgName = $matches[1]
                         $pkgVersion = $matches[2]
                         $pkgBucket = $matches[3]
+                    }
+                    # Pattern 2: "name version bucket" - space-separated (newer scoop format)
+                    elseif ($line -match '^\s*(\S+)\s+(\S+)\s+(\S+)\s*$') {
+                        $pkgName = $matches[1]
+                        $pkgVersion = $matches[2]
+                        $pkgBucket = $matches[3]
+                    }
 
+                    # If we successfully parsed a package
+                    if ($pkgName) {
                         $isInstalled = $false
                         foreach ($pkg in $installedScoop) {
                             if ($pkgName -eq $pkg) {
@@ -1794,21 +1808,28 @@ function Search-Packages {
                 Write-Host "  Found $($scoopSearchResults.Count) package(s)" -ForegroundColor Cyan
                 Write-Host ""
 
-                # Count packages available for installation (non-installed)
-                $availableCount = ($scoopSearchResults | Where-Object { -not $_.Installed }).Count
-                $installedCount = ($scoopSearchResults | Where-Object { $_.Installed }).Count
-
-                if ($installedCount -gt 0) {
-                    Write-Host "  $installedCount package(s) already installed (shown in gray)" -ForegroundColor Gray
-                }
-                if ($availableCount -eq 0) {
-                    Write-Host "  All matching packages are already installed!" -ForegroundColor Green
+                # Always show results, even if all are installed
+                if ($scoopSearchResults.Count -eq 0) {
+                    Write-Host "  No packages found to install" -ForegroundColor Gray
                 } else {
-                    Write-Host "  $availableCount package(s) available to install" -ForegroundColor Cyan
-                    Write-Host "  Select packages to install using the interactive menu..." -ForegroundColor Gray
-                    Write-Host ""
+                    # Count packages available for installation (non-installed)
+                    $availableCount = ($scoopSearchResults | Where-Object { -not $_.Installed }).Count
+                    $installedCount = ($scoopSearchResults | Where-Object { $_.Installed }).Count
 
-                    # Show interactive selection (includes all packages, but installed ones are unselectable)
+                    if ($installedCount -gt 0) {
+                        Write-Host "  $installedCount package(s) already installed (shown in gray in selection menu)" -ForegroundColor Gray
+                    }
+                    if ($availableCount -eq 0 -and $installedCount -gt 0) {
+                        Write-Host "  All matching packages are already installed!" -ForegroundColor Green
+                        Write-Host "  Showing anyway for reference..." -ForegroundColor Gray
+                        Write-Host ""
+                    } elseif ($availableCount -gt 0) {
+                        Write-Host "  $availableCount package(s) available to install" -ForegroundColor Cyan
+                        Write-Host "  Select packages to install using the interactive menu..." -ForegroundColor Gray
+                        Write-Host ""
+                    }
+
+                    # Show interactive selection even if all are installed (for reference)
                     $selectedPackages = Show-CheckboxSelection -Items $scoopSearchResults -Title "SELECT SCOOP PACKAGES TO INSTALL"
 
                     if ($selectedPackages -and $selectedPackages.Count -gt 0) {
