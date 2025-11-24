@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.10.0"
+$script:ConsoleVersion = "1.10.1"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -2390,7 +2390,7 @@ function Search-Packages {
             return $true
         }
 
-        if ($wingetListOutput -match "No package found" -or $cleanedLines.Count -eq 0) {
+        if ($wingetListOutput -match "No package found" -or $wingetListOutput -match "No installed package found" -or $cleanedLines.Count -eq 0) {
             Write-Host "  No matches found" -ForegroundColor Gray
         } else {
             # Parse and sort winget output
@@ -2762,8 +2762,9 @@ function Invoke-PackageManagerCleanup {
             Write-Host ""
 
             # Run scoop cleanup for all apps (removes old versions)
-            Write-Host "  Cleaning up old versions..." -ForegroundColor Cyan
-            scoop cleanup * --cache 2>&1 | Out-Null
+            Write-Host "  Cleaning up old versions (this may take a moment)..." -ForegroundColor Cyan
+            # Suppress ALL output including progress bars by redirecting to Out-Null in a pipeline
+            scoop cleanup * --cache 2>&1 3>&1 4>&1 5>&1 6>&1 | Out-Null
             Write-Host "  ✅ Old versions cleaned" -ForegroundColor Green
             Write-Host ""
 
@@ -2772,7 +2773,8 @@ function Invoke-PackageManagerCleanup {
             $wipeCacheResponse = Read-Host
             if ($wipeCacheResponse -match '^[Yy]') {
                 Write-Host "  Removing all cached installers..." -ForegroundColor Cyan
-                scoop cache rm *
+                # Suppress ALL output including progress bars
+                scoop cache rm * 2>&1 3>&1 4>&1 5>&1 6>&1 | Out-Null
                 Write-Host "  ✅ Scoop cache cleared" -ForegroundColor Green
             } else {
                 Write-Host "  Skipping full cache wipe" -ForegroundColor Gray
