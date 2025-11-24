@@ -20,6 +20,27 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.10.1 (2025-11-24)
+
+**Bug Fixes: Package Manager Cleanup & Search**
+
+Fixed two issues introduced in v1.10.0 package manager functionality:
+
+**Bug Fixes:**
+- **Scoop Cleanup Progress Bars**: Fixed scoop cleanup showing progress bar artifacts during execution
+  - Changed from `2>&1 | Out-Null` to `$null = ... *>&1` for proper output suppression
+  - Affects both `scoop cleanup` and `scoop cache rm` commands
+  - Now shows clean "Cleaning up..." / "✅ Old versions cleaned" messages without visual artifacts
+
+- **Winget Installed Package Search**: Fixed error when searching installed packages with no matches
+  - Added handling for "No installed package found matching input criteria" message
+  - Previously only checked for "No package found" which didn't match winget list output format
+  - Now properly displays "No matches found" instead of showing parsing errors
+
+**Technical Details:**
+- Scoop commands now use PowerShell stream redirection `*>&1` to catch all output streams
+- Winget search now checks for both global search ("No package found") and installed search ("No installed package found") error messages
+
 ### v1.10.0 (2025-11-20)
 
 **New Feature: Package Manager Cleanup + Bug Fix: Winget Search Selectability**
