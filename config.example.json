@@ -197,5 +197,5 @@
       "setup": "See modules/aws-prompt-indicator/README.md for complete setup instructions and PowerShell profile integration"
     }
   },
-  "configVersion": "1.8.0"
+  "configVersion": "1.8.1"
 }

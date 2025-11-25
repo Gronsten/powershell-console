@@ -20,6 +20,31 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.10.2 (2025-11-25)
+
+**Enhancement: Version Display & Config Cleanup**
+
+Improved version information display and cleaned up configuration template.
+
+**Enhancements:**
+- **Enhanced --version Switch**: Now displays both console version and config schema version
+  - Added formatted output with aligned labels
+  - Shows config version from config.json
+  - Gracefully handles missing or malformed config files
+  - Improved visual hierarchy with color-coded output
+
+**Config Changes:**
+- Updated configVersion to 1.8.1 in config.example.json
+- Removed exampleaccount from active config.json (retained in config.example.json as template)
+- Config schema unchanged - only template cleanup
+
+**Example Output:**
+```
+[DEV] powershell-console
+  Console version: 1.10.2
+  Config version:  1.8.1
+```
+
 ### v1.10.1 (2025-11-24)
 
 **Bug Fixes: Package Manager Cleanup & Search**
