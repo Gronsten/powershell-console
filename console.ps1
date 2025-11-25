@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.10.1"
+$script:ConsoleVersion = "1.10.2"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -24,8 +24,26 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
 
 # Handle double-dash arguments (--version, --help) by checking $MyInvocation
 if ($MyInvocation.Line -match '--version') {
+    # Load config to get configVersion
+    $configPath = Join-Path $PSScriptRoot "config.json"
+    $configVersion = "unknown"
+    if (Test-Path $configPath) {
+        try {
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+            $configVersion = $config.configVersion
+        } catch {
+            $configVersion = "error"
+        }
+    }
+
+    Write-Host ""
     Write-Host "[$script:Environment] " -ForegroundColor $script:EnvColor -NoNewline
-    Write-Host "powershell-console version $script:ConsoleVersion" -ForegroundColor Cyan
+    Write-Host "powershell-console" -ForegroundColor Cyan
+    Write-Host "  Console version: " -ForegroundColor Gray -NoNewline
+    Write-Host $script:ConsoleVersion -ForegroundColor Cyan
+    Write-Host "  Config version:  " -ForegroundColor Gray -NoNewline
+    Write-Host $configVersion -ForegroundColor Cyan
+    Write-Host ""
     exit 0
 }
 
