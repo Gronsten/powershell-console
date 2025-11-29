@@ -20,6 +20,43 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.11.0 (2025-11-29)
+
+**Enhancement: Configuration-Driven Line Counter Exclusions**
+
+Refactored line counter to use configuration-based exclusions instead of hardcoded rules, making it easier to customize which files/directories are excluded from counts.
+
+**Config Changes Required:**
+- **Updated configVersion to 1.9.0**
+- Added new `lineCounter` section to config.json with the following structure:
+  - `globalExclusions.extensions` - Array of file extensions to exclude everywhere (e.g., [".log", ".vsix", ".vhdx", ".avhdx"])
+  - `globalExclusions.pathPatterns` - Array of path segments to exclude everywhere (case-insensitive)
+  - `projectExclusions.<project-name>` - Project-specific exclusion rules:
+    - `files` - Array of exact filenames to exclude
+    - `filePatterns` - Array of filename patterns with wildcard support (e.g., "temp_*")
+    - `extensions` - Array of file extensions to exclude for this project
+    - `pathPatterns` - Array of path segments to exclude (case-insensitive)
+    - `includeOnly` - Array of filenames to whitelist (excludes all others)
+    - `excludeAll` - Boolean to exclude entire project from counts
+
+**Enhancements:**
+- **Configuration-Based Exclusions**: All exclusion rules now read from config.json instead of being hardcoded in count-lines.py
+- **Flexible Pattern Matching**: Support for exact filenames, wildcards, extensions, and path patterns
+- **Whitelist Mode**: Use `includeOnly` to selectively count specific files in a project
+- **Per-Project Customization**: Each project under devRoot can have unique exclusion rules
+- **Backward Compatible**: Fallback to default exclusions if lineCounter config is missing
+
+**Migration Notes:**
+- Existing hardcoded exclusions have been migrated to config.json
+- To customize exclusions, edit config.json → lineCounter section
+- See config.example.json for example configurations
+
+**Technical Details:**
+- Added `load_exclusion_config()` function to count-lines.py
+- Refactored `should_exclude()` to accept config parameter
+- Added `fnmatch` module for wildcard pattern matching
+- Updated ARCHITECTURE.md with lineCounter config schema documentation
+
 ### v1.10.2 (2025-11-25)
 
 **Enhancement: Version Display & Config Cleanup**

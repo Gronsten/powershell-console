@@ -262,6 +262,24 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
     }
   },
 
+  "lineCounter": {
+    // Code line counter exclusion rules (scripts/count-lines.py)
+    "globalExclusions": {
+      "extensions": [".log", ".vsix"],        // File extensions to exclude everywhere
+      "pathPatterns": ["log"]                 // Path segments to exclude (case-insensitive)
+    },
+    "projectExclusions": {
+      "project-name": {
+        "files": ["package-lock.json"],       // Exact filenames to exclude
+        "filePatterns": ["temp_*"],           // Filename patterns (wildcards supported)
+        "extensions": [".csv"],               // Project-specific extensions to exclude
+        "pathPatterns": ["backup", "_prod"],  // Path segments to exclude
+        "includeOnly": ["main.py"],           // Whitelist mode: only count these files
+        "excludeAll": true                    // Exclude entire project from counts
+      }
+    }
+  },
+
   "configVersion": "1.9.3"  // Schema version (not app version)
 }
 ```
@@ -587,12 +605,17 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
 
 **Code Line Counter**: `Start-CodeCount` (line ~3200)
 - Python-based: scripts/count-lines.py
+- **Configuration-driven exclusions** via config.json `lineCounter` section
 - Features:
-  - Project-specific exclusions (node_modules, logs, backups)
-  - Multiple encoding support
+  - Global exclusions (apply to all projects)
+  - Project-specific exclusions (files, extensions, path patterns)
+  - Whitelist mode (includeOnly) for selective counting
+  - Multiple encoding support (utf-8, latin-1, cp1252)
   - Interactive folder selection
   - CLI support for automation
-- Execution: `python count-lines.py --path $devRoot`
+- Execution: `python count-lines.py` (reads from config.json)
+- Output: Color-coded table with included/excluded file counts per project
+- Configuration: Edit `config.json` → `lineCounter` section to customize exclusions
 
 **Backup Dev Environment**: `Start-BackupDevEnvironment` (line ~3300)
 - Module: modules/backup-dev/backup-dev.ps1
