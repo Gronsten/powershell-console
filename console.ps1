@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.11.0"
+$script:ConsoleVersion = "1.11.1"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -1309,6 +1309,7 @@ function Show-CheckboxSelection {
             $displayText = $displayText.Substring(0, $maxWidth - 3) + "..."
         }
 
+        # Use same format as redraw: arrow space checkbox space text
         $line = "  [ ] $displayText"
         if ($isInstalled) {
             Write-Host $line -ForegroundColor DarkGray
@@ -1344,10 +1345,10 @@ function Show-CheckboxSelection {
                 $displayText = $displayText.Substring(0, $maxWidth - 3) + "..."
             }
 
-            # Build line with padding
+            # Build line with padding to clear entire line
             $line = "$arrow $checkbox $displayText"
-            $lineWidth = [Math]::Min($line.Length + 5, [Console]::WindowWidth - 1)
-            $line = $line.PadRight($lineWidth)
+            # Ensure we pad to full console width to clear any previous content
+            $line = $line.PadRight([Console]::WindowWidth - 1)
 
             # Write with color based on current selection and installed status
             if ($isInstalled) {
@@ -1815,9 +1816,9 @@ function Search-Packages {
                             Bucket = $pkgBucket
                             Installed = $isInstalled
                             DisplayText = if ($isInstalled) {
-                                "[ ] $pkgName - $pkgVersion ($pkgBucket) [INSTALLED]"
+                                "$pkgName - $pkgVersion ($pkgBucket) [INSTALLED]"
                             } else {
-                                "[ ] $pkgName - $pkgVersion ($pkgBucket)"
+                                "$pkgName - $pkgVersion ($pkgBucket)"
                             }
                         }
                     }
@@ -2517,29 +2518,11 @@ function Search-Packages {
                     Write-Host $line
                 }
             } else {
-                # Display with highlighting, then offer selection
-                if ($headerLine) { Write-Host $headerLine }
-                if ($separatorLine) { Write-Host $separatorLine }
-                foreach ($line in $sortedDataLines) {
-                    $parts = $line -split '\s{2,}' | Where-Object { $_.Trim() -ne '' }
-                    $isInstalled = $false
-                    if ($parts.Count -ge 2) {
-                        $packageId = $parts[1].Trim()
-                        if ($installedWinget -contains $packageId) {
-                            $isInstalled = $true
-                        }
-                    }
-                    if ($isInstalled) {
-                        Write-Host $line -ForegroundColor Green
-                    } else {
-                        Write-Host $line
-                    }
-                }
-                foreach ($line in $footerLines) {
-                    Write-Host $line
-                }
+                # Display with highlighting, then offer selection with pagination
+                Write-Host "  Found $($wingetSearchResults.Count) package(s)" -ForegroundColor Cyan
+                Write-Host ""
 
-                # Offer to install packages from search results
+                # Offer to install packages from search results with pagination
                 if ($wingetSearchResults.Count -eq 0) {
                     Write-Host "  No packages found to install" -ForegroundColor Gray
                 } else {
@@ -2553,26 +2536,54 @@ function Search-Packages {
                     if ($availableCount -eq 0) {
                         Write-Host "  All matching packages are already installed!" -ForegroundColor Green
                     } else {
-                        Write-Host ""
                         Write-Host "  $availableCount package(s) available to install" -ForegroundColor Cyan
-                        Write-Host "  Select packages to install using the interactive menu..." -ForegroundColor Gray
+                        Write-Host "  Displaying results in batches for easier browsing..." -ForegroundColor Gray
                         Write-Host ""
 
-                        # Show interactive selection (includes all packages, but installed ones are unselectable)
-                        $selectedPackages = Show-CheckboxSelection -Items $wingetSearchResults -Title "SELECT WINGET PACKAGES TO INSTALL"
+                        # Use pagination for large result sets
+                        $batchSize = 20
+                        $startIndex = 0
+                        $allSelections = @()
+                        $allSelectionsRef = [ref]$allSelections
+                        $continueSearching = $true
+                        $batchNumber = 1
 
-                        if ($selectedPackages -and $selectedPackages.Count -gt 0) {
+                        while ($continueSearching -and $startIndex -lt $wingetSearchResults.Count) {
+                            $endIndex = [Math]::Min($startIndex + $batchSize, $wingetSearchResults.Count)
+                            $currentBatch = $wingetSearchResults[$startIndex..($endIndex - 1)]
+
+                            if ($currentBatch.Count -eq 0) { break }
+
+                            # Show inline batch selection
+                            $result = Show-InlineBatchSelection `
+                                -CurrentBatch $currentBatch `
+                                -AllSelections $allSelectionsRef `
+                                -Title "SELECT WINGET PACKAGES (BATCH $batchNumber)" `
+                                -BatchNumber $batchNumber `
+                                -TotalShown $endIndex `
+                                -TotalAvailable $wingetSearchResults.Count
+
+                            if ($result.Cancelled) {
+                                $continueSearching = $false
+                            } elseif (-not $result.FetchMore) {
+                                $continueSearching = $false
+                            }
+
+                            $startIndex = $endIndex
+                            $batchNumber++
+                        }
+
+                        # Add selections to master collection for later installation
+                        if ($allSelections.Count -gt 0) {
                             # Ensure each package has Manager property for unified installation
-                            foreach ($pkg in $selectedPackages) {
+                            foreach ($pkg in $allSelections) {
                                 if (-not $pkg.Manager) {
                                     $pkg.Manager = "winget"
                                 }
                             }
-                            $script:AllPackageSelections += $selectedPackages
-                            Write-Host "`n✅ Added $($selectedPackages.Count) winget package(s) to installation queue" -ForegroundColor Green
-                        } elseif ($null -eq $selectedPackages) {
-                            Write-Host "`nWinget selection cancelled." -ForegroundColor Yellow
-                        } else {
+                            $script:AllPackageSelections += $allSelections
+                            Write-Host "`n✅ Added $($allSelections.Count) winget package(s) to installation queue" -ForegroundColor Green
+                        } elseif (-not $result.Cancelled) {
                             Write-Host "`nNo winget packages selected." -ForegroundColor Yellow
                         }
                     }
