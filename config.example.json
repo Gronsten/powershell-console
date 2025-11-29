@@ -197,5 +197,39 @@
       "setup": "See modules/aws-prompt-indicator/README.md for complete setup instructions and PowerShell profile integration"
     }
   },
-  "configVersion": "1.8.1"
+  "lineCounter": {
+    "globalExclusions": {
+      "extensions": [".log", ".vsix", ".vhdx", ".avhdx"],
+      "pathPatterns": ["log"]
+    },
+    "projectExclusions": {
+      "my-project": {
+        "files": ["package-lock.json", "yarn.lock"],
+        "pathPatterns": ["backup", "archive"]
+      },
+      "legacy-app": {
+        "includeOnly": ["main.py", "config.py"]
+      },
+      "old-project": {
+        "excludeAll": true
+      },
+      "api-project": {
+        "pathPatterns": ["backups", "logs", "config"]
+      },
+      "data-project": {
+        "extensions": [".csv", ".xlsx"],
+        "filePatterns": ["temp_*", "cache_*"]
+      }
+    },
+    "_comments": {
+      "globalExclusions": "Applied to all projects",
+      "extensions": "File extensions to exclude (e.g., '.log', '.vsix')",
+      "pathPatterns": "Path segments to exclude (case-insensitive, matches if pattern appears anywhere in path)",
+      "files": "Exact filenames to exclude",
+      "filePatterns": "Filename patterns to exclude (supports wildcards like 'temp_*')",
+      "includeOnly": "Whitelist specific files (all other files in project excluded)",
+      "excludeAll": "Exclude entire project from counts"
+    }
+  },
+  "configVersion": "1.9.0"
 }

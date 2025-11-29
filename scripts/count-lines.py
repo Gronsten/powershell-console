@@ -6,6 +6,8 @@ Shows line counts per project with inline exclusion indicators:
 - Gray text: Files/directories excluded from count
 - Excluded column: Shows count of excluded items (e.g., "26(f), 1(d)")
 
+Exclusion rules are configured in config.json under the 'lineCounter' section.
+
 Usage:
     python count-lines.py [PATH]
 
@@ -20,22 +22,52 @@ Examples:
 import os
 import sys
 import json
+import fnmatch
 from pathlib import Path
 from collections import defaultdict
 import time
 
-def should_exclude(file_path: Path, base_path: Path, dev_root: Path) -> bool:
-    """Check if a file should be excluded from counting."""
+# Global variable to store exclusion config
+_exclusion_config = None
+
+def load_exclusion_config(config_path: Path) -> dict:
+    """Load line counter exclusion configuration from config.json."""
+    global _exclusion_config
+
+    if _exclusion_config is not None:
+        return _exclusion_config
+
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        _exclusion_config = config.get('lineCounter', {})
+        return _exclusion_config
+    except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
+        print(f"Warning: Could not read lineCounter config from config.json: {e}")
+        print(f"Using default exclusions only (.git, node_modules, hidden files)")
+        _exclusion_config = {}
+        return _exclusion_config
+
+def should_exclude(file_path: Path, base_path: Path, dev_root: Path, config: dict) -> bool:
+    """Check if a file should be excluded from counting based on config.json settings."""
     rel_path = file_path.relative_to(base_path)
     parts = rel_path.parts
 
-    # Global exclusions
-    if 'log' in str(file_path).lower() or file_path.suffix == '.log':
-        return True
+    # Get global and project-specific exclusions from config
+    global_exclusions = config.get('globalExclusions', {})
+    project_exclusions = config.get('projectExclusions', {})
 
-    # Exclude .vsix files everywhere
-    if file_path.suffix == '.vsix':
-        return True
+    # Apply global exclusions
+    # Check global extensions
+    for ext in global_exclusions.get('extensions', []):
+        if file_path.suffix == ext:
+            return True
+
+    # Check global path patterns (case-insensitive)
+    file_path_str = str(file_path).lower()
+    for pattern in global_exclusions.get('pathPatterns', []):
+        if pattern.lower() in file_path_str:
+            return True
 
     # Determine the project name from the dev root perspective
     try:
@@ -45,59 +77,37 @@ def should_exclude(file_path: Path, base_path: Path, dev_root: Path) -> bool:
         # File is outside dev root, use first part of relative path
         project = parts[0] if len(parts) > 0 else None
 
-    # Project-specific exclusions
-    if project:
+    # Apply project-specific exclusions
+    if project and project in project_exclusions:
+        proj_config = project_exclusions[project]
 
-        # alohomora: exclude all except common.go and alohomora.go
-        if project == 'alohomora':
-            if file_path.name not in ['common.go', 'alohomora.go']:
-                return True
-
-        # e911: exclude all
-        elif project == 'e911':
+        # Check if entire project is excluded
+        if proj_config.get('excludeAll', False):
             return True
 
-        # Example: exclude all files from a specific project
-        # elif project == 'username@server':
-        #     return True
+        # Check includeOnly whitelist (if present, only these files are included)
+        include_only = proj_config.get('includeOnly', [])
+        if include_only:
+            return file_path.name not in include_only
 
-        # Example: only include specific file in a project
-        # elif project == 'your-project-name':
-        #     if file_path.name != 'specific-file.tf':
-        #         return True
-
-        # Example: exclude dev environment subdirectory
-        # elif project == 'another-project':
-        #     if 'dev-environment' in parts:
-        #         return True
-
-        # Example: exclude backups and logs directories
-        # elif project == 'api-project':
-        #     if 'backups' in parts or 'logs' in parts or "config" in parts:
-        #         return True
-
-        # meraki-api: exclude backups, logs, and config directories
-        elif project == 'meraki-api':
-            if 'backups' in parts or 'logs' in parts or "config" in parts:
+        # Check exact filename exclusions
+        for filename in proj_config.get('files', []):
+            if file_path.name == filename:
                 return True
 
-        # misc-scripts: exclude specific files
-        elif project == 'misc-scripts':
-            if (file_path.name == '30001_KEVLAR_61F.conf' or
-                file_path.name.startswith('hpp3') or
-                file_path.name == 'vpn_config_output.xlsx'):
+        # Check filename patterns (supports wildcards)
+        for pattern in proj_config.get('filePatterns', []):
+            if fnmatch.fnmatch(file_path.name, pattern):
                 return True
 
-        # defender: exclude .csv files
-        elif project == 'defender':
-            if file_path.suffix == '.csv':
+        # Check project-specific extensions
+        for ext in proj_config.get('extensions', []):
+            if file_path.suffix == ext:
                 return True
 
-        # powershell-console: exclude files with 'backup' in name and _prod directory
-        elif project == 'powershell-console':
-            if (file_path.name == 'npm-packages.json' or
-                'backup' in file_path.name.lower() or
-                '_prod' in parts):
+        # Check project-specific path patterns (case-insensitive)
+        for pattern in proj_config.get('pathPatterns', []):
+            if pattern.lower() in file_path_str:
                 return True
 
     return False
@@ -116,13 +126,17 @@ def count_lines_in_file(file_path: Path) -> int:
             return 0
     return 0
 
-def count_project_lines(base_path: Path, dev_root: Path = None):
+def count_project_lines(base_path: Path, dev_root: Path = None, exclusion_config: dict = None):
     """Count lines across all projects with exclusions."""
     start_time = time.time()
 
     # If dev_root not specified, assume base_path is the dev root
     if dev_root is None:
         dev_root = base_path
+
+    # If exclusion_config not provided, use empty dict (no exclusions except defaults)
+    if exclusion_config is None:
+        exclusion_config = {}
 
     # Track both included and excluded items per project
     project_stats = defaultdict(lambda: {
@@ -159,7 +173,7 @@ def count_project_lines(base_path: Path, dev_root: Path = None):
                 rel_path = file_path.relative_to(base_path)
                 project = rel_path.parts[0] if len(rel_path.parts) > 0 else 'root'
 
-                if should_exclude(file_path, base_path, dev_root):
+                if should_exclude(file_path, base_path, dev_root, exclusion_config):
                     project_stats[project]['excluded_files'] += 1
                     total_excluded_files += 1
                     continue
@@ -240,7 +254,7 @@ def count_project_lines(base_path: Path, dev_root: Path = None):
     print("="*80)
 
 if __name__ == '__main__':
-    # Load dev root from config.json
+    # Load config from config.json
     script_dir = Path(__file__).resolve().parent
     config_path = script_dir.parent / 'config.json'
 
@@ -252,6 +266,9 @@ if __name__ == '__main__':
         print(f"Error: Could not read devRoot from config.json: {e}")
         print(f"Expected config at: {config_path}")
         sys.exit(1)
+
+    # Load exclusion configuration
+    exclusion_config = load_exclusion_config(config_path)
 
     # Parse command line arguments
     if len(sys.argv) > 1:
@@ -290,4 +307,4 @@ if __name__ == '__main__':
         # Default to devRoot from config.json
         base_path = dev_root
 
-    count_project_lines(base_path, dev_root)
+    count_project_lines(base_path, dev_root, exclusion_config)
