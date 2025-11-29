@@ -20,6 +20,31 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.11.1 (2025-11-29)
+
+**Bug Fixes: Package Manager UI Improvements**
+
+Fixed display issues and added pagination support for better package manager usability.
+
+**Bug Fixes:**
+- **Fixed Double Checkbox in Scoop Search** - Removed embedded `[ ]` from DisplayText property
+  - Before: `> [ ] [ ] freebasic - 1.10.1 (main)`
+  - After: `> [ ] freebasic - 1.10.1 (main)`
+- **Fixed Line Clearing in Checkbox Selection** - Updated padding to always use full console width to prevent ghost characters
+
+**Enhancements:**
+- **Added Pagination to Winget Global Search** - Prevents results from running off screen
+  - Batch size: 20 packages per page
+  - Press M to fetch more batches
+  - Shows "Showing X of Y | Selected: Z" progress
+  - Selections preserved across all batches
+  - Same UX pattern as npm search
+
+**User Experience:**
+- Consistent interaction pattern across all package managers (Scoop, npm, winget, pip)
+- Better readability with clean checkbox display
+- Manageable winget search results with pagination
+
 ### v1.11.0 (2025-11-29)
 
 **Enhancement: Configuration-Driven Line Counter Exclusions**
