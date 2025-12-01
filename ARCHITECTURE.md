@@ -1,6 +1,6 @@
 # PowerShell Console - Architecture Guide
 
-**Version:** 1.12.0
+**Version:** 1.13.0
 **Last Updated:** 2025-12-01
 **Purpose:** Technical architecture reference for Claude AI assistant sessions
 
@@ -774,8 +774,65 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
 | `Update-Pip` | Update pip packages | Uses `pip list --outdated --format=json` |
 | `Get-InstalledPackages` | List all installed packages | Combines all package managers |
 | `Select-PackagesToUpdate` | Interactive update selection | Checkbox interface |
-| `Show-CheckboxSelection` | Generic checkbox selection UI | Arrow keys + spacebar |
+| `Show-CheckboxSelection` | Centralized checkbox selection UI | Supports Clear-Host/cursor modes, custom key handlers, all items selection |
+| `Show-InlineBatchSelection` | Paginated checkbox selection | Used for winget search with "fetch more" |
 | `Search-Packages` | Search for packages | npm (local DB) + pip (API) |
+
+#### Enhanced Show-CheckboxSelection Function (Line ~1276)
+
+**Purpose:** Centralized, flexible checkbox selection UI used throughout the application for package selection, updates, and file browsing.
+
+**Parameters:**
+- `$Items` (required) - Array of items to display
+- `$Title` (required) - Title shown in header
+- `$Instructions` (optional) - Custom instructions text
+- `$UseClearHost` (switch) - Use Clear-Host redraw instead of cursor positioning
+- `$CustomKeyHandler` (scriptblock) - Custom key handling logic
+- `$CustomInstructions` (hashtable) - Additional instruction lines
+- `$AllowAllItemsSelection` (switch) - Allow selection of items marked as "Installed"
+
+**Features:**
+- **Dual Rendering Modes:**
+  - Cursor positioning (default) - Efficient, no flicker, preserves console history
+  - Clear-Host mode - Simple, works better for complex UIs with multiple sections
+- **Checkbox Indicators:** Uses lowercase `[x]` for selected, `[ ]` for unselected
+- **Installed Item Handling:** Items with `Installed=true` property are:
+  - Displayed in DarkGray
+  - Unselectable by default (unless `AllowAllItemsSelection` is used)
+- **Standard Keys:**
+  - Up/Down arrows - Navigate
+  - Space - Toggle selection
+  - A - Select all (respects installed status)
+  - N - Deselect all
+  - Enter - Confirm
+  - Q - Cancel (returns `$null`)
+- **Custom Key Handlers:** Can inject custom logic via `$CustomKeyHandler` parameter
+- **Return Value:** Array of selected items, or `$null` if cancelled
+
+**Usage Examples:**
+```powershell
+# Basic usage (cursor positioning mode)
+$selected = Show-CheckboxSelection -Items $packages -Title "SELECT PACKAGES"
+
+# Clear-Host mode with all items selectable
+$selected = Show-CheckboxSelection -Items $updates -Title "MANAGE UPDATES" -UseClearHost -AllowAllItemsSelection
+
+# With custom key handler
+$customHandler = {
+    param($Key, [ref]$CurrentIndex, [ref]$SelectedIndexes, [ref]$Done, $Items)
+    if ($Key.Key -eq 'RightArrow') {
+        # Custom logic here
+        return $true  # Indicates key was handled
+    }
+    return $false  # Let standard handler process it
+}
+$selected = Show-CheckboxSelection -Items $items -Title "CUSTOM" -CustomKeyHandler $customHandler
+```
+
+**Refactoring Impact:**
+- Update selection UI (line ~1160) migrated to use this function
+- Reduced code duplication by ~60 lines
+- File browser UI (line ~3850) kept separate due to complex navigation state
 
 ### Menu System Functions (Lines 900-1500)
 

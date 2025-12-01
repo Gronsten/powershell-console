@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.12.0"
+$script:ConsoleVersion = "1.13.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -594,6 +594,80 @@ function Update-Scoop {
     }
 }
 
+function Get-NpmInstallInfo {
+    <#
+    .SYNOPSIS
+    Detects how npm/nodejs is installed and whether npm package updates should be managed.
+
+    .DESCRIPTION
+    Returns information about npm installation:
+    - IsScoopManaged: Whether npm is installed via Scoop
+    - CliVersion: Version from 'npm --version'
+    - GlobalVersion: Version from 'npm list -g npm' (if npm is globally installed)
+    - ShouldManageNpmPackage: Whether npm package itself should appear in updates
+
+    .EXAMPLE
+    $npmInfo = Get-NpmInstallInfo
+    if (-not $npmInfo.ShouldManageNpmPackage) {
+        # Skip npm package in update list
+    }
+    #>
+    [CmdletBinding()]
+    param()
+
+    $result = @{
+        IsScoopManaged = $false
+        CliVersion = $null
+        GlobalVersion = $null
+        ShouldManageNpmPackage = $false
+        NpmPath = $null
+    }
+
+    try {
+        # Get npm executable path
+        $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+        if (-not $npmCmd) {
+            return $result
+        }
+
+        $result.NpmPath = $npmCmd.Path
+
+        # Check if npm is installed via Scoop (path contains 'scoop')
+        if ($result.NpmPath -match '\\scoop\\') {
+            $result.IsScoopManaged = $true
+        }
+
+        # Get CLI version (the npm that runs when you type 'npm')
+        $result.CliVersion = (npm --version 2>&1).Trim()
+
+        # Check if npm is globally installed as a package
+        $npmListOutput = npm list -g npm --depth=0 2>&1 | Out-String
+        if ($npmListOutput -match 'npm@([\d\.]+)') {
+            $result.GlobalVersion = $matches[1]
+        }
+
+        # Determine if we should manage npm package updates
+        # Only manage if:
+        # 1. NOT Scoop-managed, OR
+        # 2. Scoop-managed BUT there's a global override (GlobalVersion exists and differs from CliVersion)
+        if (-not $result.IsScoopManaged) {
+            # Standalone npm installation - we should manage it
+            $result.ShouldManageNpmPackage = $true
+        } elseif ($result.GlobalVersion -and $result.GlobalVersion -ne $result.CliVersion) {
+            # Scoop-managed but has global override - we should manage the override
+            $result.ShouldManageNpmPackage = $true
+        } else {
+            # Scoop-managed with no override - let Scoop handle it
+            $result.ShouldManageNpmPackage = $false
+        }
+
+    } catch {
+        Write-Host "  ⚠️  Error detecting npm installation: $_" -ForegroundColor Red
+    }
+
+    return $result
+}
+
 function Update-npm {
     [CmdletBinding()]
     param()
@@ -928,9 +1002,18 @@ function Select-PackagesToUpdate {
     # Check npm
     Write-Host "Checking npm for updates..." -ForegroundColor Gray
     try {
+        # Get npm installation info to determine if we should manage npm package
+        $npmInfo = Get-NpmInstallInfo
+
         $npmOutdated = npm outdated -g --json 2>&1 | ConvertFrom-Json
         if ($npmOutdated) {
             foreach ($pkg in $npmOutdated.PSObject.Properties) {
+                # Skip npm package itself if it's Scoop-managed (let Scoop handle nodejs-lts updates)
+                if ($pkg.Name -eq "npm" -and -not $npmInfo.ShouldManageNpmPackage) {
+                    Write-Host "  → Skipping npm (managed by Scoop nodejs-lts)" -ForegroundColor DarkGray
+                    continue
+                }
+
                 $availableUpdates += @{
                     Manager = "npm"
                     Name = $pkg.Name
@@ -1160,78 +1243,22 @@ function Select-PackagesToUpdate {
         return
     }
 
-    # Display available updates with checkboxes
+    # Display available updates with checkboxes using centralized function
     Write-Host "`nAvailable updates:" -ForegroundColor Yellow
-    Write-Host ""
 
-    $selectedIndexes = @()
-    for ($i = 0; $i -lt $availableUpdates.Count; $i++) {
-        $selectedIndexes += $false
-    }
+    $selectedPackages = Show-CheckboxSelection `
+        -Items $availableUpdates `
+        -Title "MANAGE PACKAGE UPDATES" `
+        -Instructions "Use Up/Down arrows to navigate, Space to select/deselect, Enter to install" `
+        -UseClearHost `
+        -AllowAllItemsSelection
 
-    $currentIndex = 0
-    $done = $false
-
-    while (-not $done) {
-        Clear-Host
-        Write-Host "╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║  MANAGE PACKAGE UPDATES                    ║" -ForegroundColor Cyan
-        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
-
-        Write-Host "Use Up/Down arrows to navigate, Space to select/deselect, Enter to install" -ForegroundColor Gray
-        Write-Host "Press A to select all, N to deselect all, Q to cancel`n" -ForegroundColor Gray
-
-        for ($i = 0; $i -lt $availableUpdates.Count; $i++) {
-            $update = $availableUpdates[$i]
-            $checkbox = if ($selectedIndexes[$i]) { "[X]" } else { "[ ]" }
-            $arrow = if ($i -eq $currentIndex) { ">" } else { " " }
-            $color = if ($i -eq $currentIndex) { "Green" } else { "White" }
-
-            Write-Host "$arrow $checkbox $($update.DisplayText)" -ForegroundColor $color
+    if (-not $selectedPackages -or $selectedPackages.Count -eq 0) {
+        if ($null -eq $selectedPackages) {
+            Write-Host "`nCancelled." -ForegroundColor Yellow
+        } else {
+            Write-Host "`nNo packages selected." -ForegroundColor Yellow
         }
-
-        $key = [Console]::ReadKey($true)
-
-        switch ($key.Key) {
-            'UpArrow' {
-                $currentIndex = ($currentIndex - 1 + $availableUpdates.Count) % $availableUpdates.Count
-            }
-            'DownArrow' {
-                $currentIndex = ($currentIndex + 1) % $availableUpdates.Count
-            }
-            'Spacebar' {
-                $selectedIndexes[$currentIndex] = -not $selectedIndexes[$currentIndex]
-            }
-            'A' {
-                for ($i = 0; $i -lt $selectedIndexes.Count; $i++) {
-                    $selectedIndexes[$i] = $true
-                }
-            }
-            'N' {
-                for ($i = 0; $i -lt $selectedIndexes.Count; $i++) {
-                    $selectedIndexes[$i] = $false
-                }
-            }
-            'Enter' {
-                $done = $true
-            }
-            'Q' {
-                Write-Host "`nCancelled." -ForegroundColor Yellow
-                return
-            }
-        }
-    }
-
-    # Install selected packages
-    $selectedPackages = @()
-    for ($i = 0; $i -lt $availableUpdates.Count; $i++) {
-        if ($selectedIndexes[$i]) {
-            $selectedPackages += $availableUpdates[$i]
-        }
-    }
-
-    if ($selectedPackages.Count -eq 0) {
-        Write-Host "`nNo packages selected." -ForegroundColor Yellow
         return
     }
 
@@ -1283,7 +1310,19 @@ function Show-CheckboxSelection {
         [string]$Title,
 
         [Parameter(Mandatory=$false)]
-        [string]$Instructions = "Use Up/Down arrows to navigate, Space to select/deselect, Enter to confirm"
+        [string]$Instructions = "Use Up/Down arrows to navigate, Space to select/deselect, Enter to confirm",
+
+        [Parameter(Mandatory=$false)]
+        [switch]$UseClearHost = $false,
+
+        [Parameter(Mandatory=$false)]
+        [scriptblock]$CustomKeyHandler = $null,
+
+        [Parameter(Mandatory=$false)]
+        [hashtable]$CustomInstructions = @{},
+
+        [Parameter(Mandatory=$false)]
+        [switch]$AllowAllItemsSelection = $false
     )
 
     if ($Items.Count -eq 0) {
@@ -1297,129 +1336,209 @@ function Show-CheckboxSelection {
 
     $currentIndex = 0
     $done = $false
+    $startLine = 0
 
-    # Draw header once
-    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║  $($Title.PadRight(42)) ║" -ForegroundColor Cyan
-    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+    # Function to draw the UI (for Clear-Host mode only in loop)
+    $drawUI = {
+        Clear-Host
 
-    Write-Host $Instructions -ForegroundColor Gray
-    Write-Host "Press A to select all, N to deselect all, Q to cancel`n" -ForegroundColor Gray
+        # Draw header
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║  $($Title.PadRight(42)) ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
 
-    $startLine = [Console]::CursorTop
+        Write-Host $Instructions -ForegroundColor Gray
 
-    # Draw initial list once (let console scroll naturally)
-    for ($i = 0; $i -lt $Items.Count; $i++) {
-        $item = $Items[$i]
-        $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
-        $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
-
-        # Truncate to console width
-        $maxWidth = [Console]::WindowWidth - 10
-        if ($displayText.Length -gt $maxWidth) {
-            $displayText = $displayText.Substring(0, $maxWidth - 3) + "..."
-        }
-
-        # Use same format as redraw: arrow space checkbox space text
-        $line = "  [ ] $displayText"
-        if ($isInstalled) {
-            Write-Host $line -ForegroundColor DarkGray
-        } else {
-            Write-Host $line
-        }
-    }
-
-    # After drawing, recalculate startLine (window may have scrolled)
-    $endLine = [Console]::CursorTop
-    $startLine = $endLine - $Items.Count
-
-    while (-not $done) {
-        # Redraw selection list
-        for ($i = 0; $i -lt $Items.Count; $i++) {
-            try {
-                [Console]::SetCursorPosition(0, $startLine + $i)
-            } catch {
-                # If we can't set position, we're likely at buffer limit
-                continue
+        # Show custom instructions if provided
+        if ($CustomInstructions.Count -gt 0) {
+            foreach ($key in $CustomInstructions.Keys) {
+                Write-Host $CustomInstructions[$key] -ForegroundColor Gray
             }
+        } else {
+            Write-Host "Press A to select all, N to deselect all, Q to cancel`n" -ForegroundColor Gray
+        }
 
+        # Draw items
+        for ($i = 0; $i -lt $Items.Count; $i++) {
             $item = $Items[$i]
             $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
-            $checkbox = if ($selectedIndexes[$i]) { "[X]" } else { "[ ]" }
-            $arrow = if ($i -eq $currentIndex) { ">" } else { " " }
-
             $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
 
-            # Truncate to console width to prevent wrapping
+            # Truncate to console width
             $maxWidth = [Console]::WindowWidth - 10
             if ($displayText.Length -gt $maxWidth) {
                 $displayText = $displayText.Substring(0, $maxWidth - 3) + "..."
             }
 
-            # Build line with padding to clear entire line
+            $checkbox = if ($selectedIndexes[$i]) { "[x]" } else { "[ ]" }
+            $arrow = if ($i -eq $currentIndex) { ">" } else { " " }
             $line = "$arrow $checkbox $displayText"
-            # Ensure we pad to full console width to clear any previous content
-            $line = $line.PadRight([Console]::WindowWidth - 1)
 
-            # Write with color based on current selection and installed status
-            if ($isInstalled) {
-                [Console]::ForegroundColor = [ConsoleColor]::DarkGray
-            } elseif ($i -eq $currentIndex) {
-                [Console]::ForegroundColor = [ConsoleColor]::Green
-            } else {
-                [Console]::ForegroundColor = [ConsoleColor]::White
+            # Simple color output for Clear-Host mode
+            $color = if ($i -eq $currentIndex) { "Green" } else { "White" }
+            if ($isInstalled) { $color = "DarkGray" }
+            Write-Host $line -ForegroundColor $color
+        }
+    }
+
+    # Initial draw based on mode
+    if ($UseClearHost) {
+        & $drawUI
+    } else {
+        # Draw header once for cursor positioning mode
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║  $($Title.PadRight(42)) ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+
+        Write-Host $Instructions -ForegroundColor Gray
+
+        # Show custom instructions if provided
+        if ($CustomInstructions.Count -gt 0) {
+            foreach ($key in $CustomInstructions.Keys) {
+                Write-Host $CustomInstructions[$key] -ForegroundColor Gray
             }
-            [Console]::Write($line)
-            [Console]::ResetColor()
+        } else {
+            Write-Host "Press A to select all, N to deselect all, Q to cancel`n" -ForegroundColor Gray
+        }
+
+        $startLine = [Console]::CursorTop
+
+        # Draw initial list once (let console scroll naturally)
+        for ($i = 0; $i -lt $Items.Count; $i++) {
+            $item = $Items[$i]
+            $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
+            $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
+
+            # Truncate to console width
+            $maxWidth = [Console]::WindowWidth - 10
+            if ($displayText.Length -gt $maxWidth) {
+                $displayText = $displayText.Substring(0, $maxWidth - 3) + "..."
+            }
+
+            # Use same format as redraw: arrow space checkbox space text
+            $line = "  [ ] $displayText"
+            if ($isInstalled) {
+                Write-Host $line -ForegroundColor DarkGray
+            } else {
+                Write-Host $line
+            }
+        }
+
+        # After drawing, recalculate startLine (window may have scrolled)
+        $endLine = [Console]::CursorTop
+        $startLine = $endLine - $Items.Count
+    }
+
+    while (-not $done) {
+        # Redraw UI based on mode
+        if ($UseClearHost) {
+            & $drawUI
+        } else {
+            # Redraw selection list using cursor positioning
+            for ($i = 0; $i -lt $Items.Count; $i++) {
+                try {
+                    [Console]::SetCursorPosition(0, $startLine + $i)
+                } catch {
+                    # If we can't set position, we're likely at buffer limit
+                    continue
+                }
+
+                $item = $Items[$i]
+                $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
+                $checkbox = if ($selectedIndexes[$i]) { "[x]" } else { "[ ]" }
+                $arrow = if ($i -eq $currentIndex) { ">" } else { " " }
+
+                $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
+
+                # Truncate to console width to prevent wrapping
+                $maxWidth = [Console]::WindowWidth - 10
+                if ($displayText.Length -gt $maxWidth) {
+                    $displayText = $displayText.Substring(0, $maxWidth - 3) + "..."
+                }
+
+                # Build line with padding to clear entire line
+                $line = "$arrow $checkbox $displayText"
+                # Ensure we pad to full console width to clear any previous content
+                $line = $line.PadRight([Console]::WindowWidth - 1)
+
+                # Write with color based on current selection and installed status
+                if ($isInstalled) {
+                    [Console]::ForegroundColor = [ConsoleColor]::DarkGray
+                } elseif ($i -eq $currentIndex) {
+                    [Console]::ForegroundColor = [ConsoleColor]::Green
+                } else {
+                    [Console]::ForegroundColor = [ConsoleColor]::White
+                }
+                [Console]::Write($line)
+                [Console]::ResetColor()
+            }
         }
 
         $key = [Console]::ReadKey($true)
 
-        switch ($key.Key) {
-            'UpArrow' {
-                $currentIndex = ($currentIndex - 1 + $Items.Count) % $Items.Count
+        # Try custom key handler first
+        $customHandled = $false
+        if ($CustomKeyHandler) {
+            $customResult = & $CustomKeyHandler -Key $key -CurrentIndex ([ref]$currentIndex) -SelectedIndexes ([ref]$selectedIndexes) -Done ([ref]$done) -Items $Items
+            if ($customResult -eq $true) {
+                $customHandled = $true
             }
-            'DownArrow' {
-                $currentIndex = ($currentIndex + 1) % $Items.Count
-            }
-            'Spacebar' {
-                # Only allow selection of non-installed packages
-                $item = $Items[$currentIndex]
-                $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
-                if (-not $isInstalled) {
-                    $selectedIndexes[$currentIndex] = -not $selectedIndexes[$currentIndex]
+        }
+
+        # Standard key handling if not handled by custom handler
+        if (-not $customHandled) {
+            switch ($key.Key) {
+                'UpArrow' {
+                    $currentIndex = ($currentIndex - 1 + $Items.Count) % $Items.Count
                 }
-            }
-            'A' {
-                # Select all non-installed packages only
-                for ($i = 0; $i -lt $selectedIndexes.Count; $i++) {
-                    $item = $Items[$i]
+                'DownArrow' {
+                    $currentIndex = ($currentIndex + 1) % $Items.Count
+                }
+                'Spacebar' {
+                    # Allow selection based on installed status
+                    $item = $Items[$currentIndex]
                     $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
-                    if (-not $isInstalled) {
-                        $selectedIndexes[$i] = $true
+                    if ($AllowAllItemsSelection -or -not $isInstalled) {
+                        $selectedIndexes[$currentIndex] = -not $selectedIndexes[$currentIndex]
                     }
                 }
-            }
-            'N' {
-                for ($i = 0; $i -lt $selectedIndexes.Count; $i++) {
-                    $selectedIndexes[$i] = $false
+                'A' {
+                    # Select all items based on AllowAllItemsSelection parameter
+                    for ($i = 0; $i -lt $selectedIndexes.Count; $i++) {
+                        $item = $Items[$i]
+                        $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
+                        if ($AllowAllItemsSelection -or -not $isInstalled) {
+                            $selectedIndexes[$i] = $true
+                        }
+                    }
                 }
-            }
-            'Enter' {
-                $done = $true
-            }
-            'Q' {
-                # Move cursor past the selection list before returning
-                [Console]::SetCursorPosition(0, $startLine + $Items.Count)
-                Write-Host ""
-                return $null  # Return null to indicate cancellation
+                'N' {
+                    for ($i = 0; $i -lt $selectedIndexes.Count; $i++) {
+                        $selectedIndexes[$i] = $false
+                    }
+                }
+                'Enter' {
+                    $done = $true
+                }
+                'Q' {
+                    # Clean up based on mode
+                    if (-not $UseClearHost) {
+                        [Console]::SetCursorPosition(0, $startLine + $Items.Count)
+                        Write-Host ""
+                    } else {
+                        Write-Host "`nCancelled." -ForegroundColor Yellow
+                    }
+                    return $null  # Return null to indicate cancellation
+                }
             }
         }
     }
 
-    # Move cursor past the selection list to continue normal output
-    [Console]::SetCursorPosition(0, $startLine + $Items.Count)
-    Write-Host ""
+    # Clean up based on mode
+    if (-not $UseClearHost) {
+        [Console]::SetCursorPosition(0, $startLine + $Items.Count)
+        Write-Host ""
+    }
 
     # Return selected items
     $selected = @()
@@ -1522,7 +1641,7 @@ function Show-InlineBatchSelection {
 
             $item = $CurrentBatch[$i]
             $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
-            $checkbox = if ($selectedIndexes[$i]) { "[X]" } else { "[ ]" }
+            $checkbox = if ($selectedIndexes[$i]) { "[x]" } else { "[ ]" }
             $arrow = if ($i -eq $currentIndex) { ">" } else { " " }
 
             $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
@@ -2833,45 +2952,6 @@ function Invoke-PackageManagerCleanup {
     try {
         $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
         if ($npmCmd) {
-            # Check if npm itself needs updating
-            Write-Host "  Checking npm version..." -ForegroundColor Cyan
-            $npmVersion = npm --version 2>&1
-            $npmNeedsUpdate = $false
-            try {
-                $latestNpm = npm view npm version 2>&1
-                Write-Host "  Current: $npmVersion | Latest: $latestNpm" -ForegroundColor Gray
-
-                # Check if versions differ
-                if ($npmVersion -ne $latestNpm) {
-                    $npmNeedsUpdate = $true
-                }
-            } catch {
-                Write-Host "  Current npm version: $npmVersion" -ForegroundColor Gray
-                $npmNeedsUpdate = $true  # Assume update needed if we can't check
-            }
-
-            # Note about Scoop management
-            $scoopNodejs = Get-Command scoop -ErrorAction SilentlyContinue
-            if ($scoopNodejs) {
-                Write-Host "  Note: npm is bundled with nodejs-lts (Scoop)" -ForegroundColor DarkGray
-                Write-Host "        Updates may be overwritten by Scoop updates" -ForegroundColor DarkGray
-            }
-
-            if ($npmNeedsUpdate) {
-                Write-Host "  Update npm to latest? (Y/n): " -ForegroundColor Yellow -NoNewline
-                $updateNpmResponse = Read-Host
-                if ($updateNpmResponse -notmatch '^[Nn]') {
-                    Write-Host "  Updating npm..." -ForegroundColor Cyan
-                    npm install -g npm
-                    Write-Host "  ✅ npm updated" -ForegroundColor Green
-                } else {
-                    Write-Host "  Skipping npm update" -ForegroundColor Gray
-                }
-            } else {
-                Write-Host "  ✅ npm is already up to date" -ForegroundColor Green
-            }
-            Write-Host ""
-
             # Clean cache
             Write-Host "  Cleaning npm cache..." -ForegroundColor Cyan
             npm cache clean --force
@@ -3849,7 +3929,7 @@ function Start-CodeCount {
 
             for ($i = 0; $i -lt $menuOptions.Count; $i++) {
                 $option = $menuOptions[$i]
-                $checkbox = if ($selectedIndexes[$i]) { "[X]" } else { "[ ]" }
+                $checkbox = if ($selectedIndexes[$i]) { "[x]" } else { "[ ]" }
                 $arrow = if ($i -eq $currentIndex) { ">" } else { " " }
                 $color = if ($i -eq $currentIndex) { "Green" } else { "White" }
 

@@ -20,6 +20,67 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.13.0 (2025-12-01)
+
+**Major Release: Checkbox UI Centralization and Smart npm Management**
+
+This release focuses on code quality improvements, UI consistency, and intelligent package management.
+
+**New Features:**
+- **Enhanced Checkbox Selection UI** - Centralized and flexible checkbox function
+  - New `Show-CheckboxSelection` parameters for maximum flexibility:
+    - `$UseClearHost` - Choose between cursor positioning (efficient) or Clear-Host (simple) rendering
+    - `$CustomKeyHandler` - Inject custom key handling logic via scriptblock
+    - `$CustomInstructions` - Add custom instruction lines to the UI
+    - `$AllowAllItemsSelection` - Control whether items marked as "Installed" can be selected
+  - Comprehensive PowerShell help documentation with examples
+  - Supports both rendering modes for different use cases
+  - Update selection UI migrated to use centralized function (~60 lines of code eliminated)
+
+- **Smart npm Version Management** - Intelligent detection of npm installation method
+  - New `Get-NpmInstallInfo` helper function detects:
+    - Whether npm is Scoop-managed (checks if path contains '\scoop\')
+    - CLI version (`npm --version`) vs Global version (`npm list -g npm`)
+    - Whether npm package updates should be managed or delegated to Scoop
+  - **Automatic Filtering**: npm package excluded from updates if Scoop-managed
+    - Message displayed: "→ Skipping npm (managed by Scoop nodejs-lts)"
+    - Prevents version conflicts when Scoop manages nodejs-lts package
+    - Still shows npm if user explicitly installed global override
+  - All other npm global packages remain unaffected (@anthropic-ai/claude-code, esbuild, etc.)
+
+**UX Improvements:**
+- **Lowercase Checkbox Indicators** - Changed `[X]` → `[x]` throughout for cleaner, more subtle appearance
+  - Updated in 4 locations: Show-CheckboxSelection, Show-InlineBatchSelection, update UI, file browser
+- **npm Cleanup Simplification** - Removed version check/update from cleanup function
+  - Cleanup now only performs cache maintenance (clean + verify)
+  - npm updates handled in proper update workflow (separation of concerns)
+  - Removed "Update npm to latest? (Y/n)" prompt (~45 lines eliminated)
+  - Removed note about Scoop managing npm version
+
+**Bug Fixes:**
+- **Checkbox Visual Artifacts** - Fixed issue where checkbox items appeared at top of screen during global package search
+  - Separated initial draw logic for cursor positioning mode
+  - Initial draw uses simple format, cursor positioning for updates
+  - Prevents orphaned lines when console scrolls
+
+**Code Quality:**
+- **Reduced Duplication**: ~105 lines of duplicate/unnecessary code removed
+- **Improved Maintainability**: Single source of truth for checkbox UI and npm detection
+- **Better Documentation**: Comprehensive function documentation in ARCHITECTURE.md
+- **Separation of Concerns**: Cleanup cleans, updates update, clear responsibilities
+
+**Technical Details:**
+- Console version: 1.12.0 → 1.13.0
+- Config version: config.10 (no schema changes)
+- New function: `Get-NpmInstallInfo` (lines 597-669)
+- Enhanced function: `Show-CheckboxSelection` (lines 1276-1503)
+- npm update check now uses smart filtering (lines 1002-1028)
+
+**Files Changed:**
+- `console.ps1`: Version update, Get-NpmInstallInfo function, enhanced Show-CheckboxSelection, npm filtering, checkbox indicators
+- `ARCHITECTURE.md`: Updated version, documented enhanced functions with examples
+- `CHANGELOG.md`: This entry
+
 ### v1.12.0 (2025-12-01)
 
 **Major Release: UI Improvements and Standardization**
