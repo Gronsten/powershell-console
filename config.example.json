@@ -7,7 +7,6 @@
     "linksPath": "C:\\Users\\YourUsername\\Favorites\\Links\\",
     "backupSource": "C:\\AppInstall\\",
     "backupDestination": "OneDrive - Company Name\\DevBackups",
-    "backupLogFile": "backup-log.txt",
     "devRoot": "C:\\path\\to\\dev",
     "vpnOutputPath": "C:\\path\\to\\vpn_output"
   },
@@ -98,11 +97,11 @@
     "Main Menu": [
       {
         "text": "Ping Google",
-        "action": "\r\n            Start-InteractivePing -Target \"google.com\"\r\n            pause\r\n        "
+        "action": "\r\n            Start-InteractivePing -Target \"google.com\"\r\n            Invoke-StandardPause\r\n        "
       },
       {
         "text": "IP Config",
-        "action": "\r\n            Show-NetworkConfiguration\r\n            pause\r\n        "
+        "action": "\r\n            Show-NetworkConfiguration\r\n            Invoke-StandardPause\r\n        "
       },
       {
         "text": "AWS Login",
@@ -110,15 +109,15 @@
       },
       {
         "text": "PowerShell Profile Edit",
-        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.profilePath)'\"\r\n            pause\r\n        "
+        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.profilePath)'\"\r\n            Invoke-StandardPause\r\n        "
       },
       {
         "text": "Okta YAML Edit",
-        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.oktaYamlPath)'\"\r\n            pause\r\n        "
+        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.oktaYamlPath)'\"\r\n            Invoke-StandardPause\r\n        "
       },
       {
         "text": "Whitelist Links Folder",
-        "action": "\r\n            Invoke-Expression \"icacls '$($script:Config.paths.linksPath)' /t /setintegritylevel m\"\r\n            pause\r\n        "
+        "action": "\r\n            Invoke-Expression \"icacls '$($script:Config.paths.linksPath)' /t /setintegritylevel m\"\r\n            Invoke-StandardPause\r\n        "
       },
       {
         "text": "Meraki Backup",
@@ -140,15 +139,15 @@
     "Package Manager": [
       {
         "text": "Manage Updates",
-        "action": "\r\n            Select-PackagesToUpdate\r\n            pause\r\n        "
+        "action": "\r\n            Select-PackagesToUpdate\r\n            Invoke-StandardPause\r\n        "
       },
       {
         "text": "List Installed Packages",
-        "action": "\r\n            Get-InstalledPackages\r\n            pause\r\n        "
+        "action": "\r\n            Get-InstalledPackages\r\n            Invoke-StandardPause\r\n        "
       },
       {
         "text": "Search Packages",
-        "action": "\r\n            Search-Packages\r\n            pause\r\n        "
+        "action": "\r\n            Search-Packages\r\n            Invoke-StandardPause\r\n        "
       }
     ],
     "Instance Management": [
@@ -231,5 +230,5 @@
       "excludeAll": "Exclude entire project from counts"
     }
   },
-  "configVersion": "1.9.0"
+  "configVersion": "config.10"
 }

@@ -20,6 +20,121 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.13.0 (2025-12-01)
+
+**Major Release: Checkbox UI Centralization and Smart npm Management**
+
+This release focuses on code quality improvements, UI consistency, and intelligent package management.
+
+**New Features:**
+- **Enhanced Checkbox Selection UI** - Centralized and flexible checkbox function
+  - New `Show-CheckboxSelection` parameters for maximum flexibility:
+    - `$UseClearHost` - Choose between cursor positioning (efficient) or Clear-Host (simple) rendering
+    - `$CustomKeyHandler` - Inject custom key handling logic via scriptblock
+    - `$CustomInstructions` - Add custom instruction lines to the UI
+    - `$AllowAllItemsSelection` - Control whether items marked as "Installed" can be selected
+  - Comprehensive PowerShell help documentation with examples
+  - Supports both rendering modes for different use cases
+  - Update selection UI migrated to use centralized function (~60 lines of code eliminated)
+
+- **Smart npm Version Management** - Intelligent detection of npm installation method
+  - New `Get-NpmInstallInfo` helper function detects:
+    - Whether npm is Scoop-managed (checks if path contains '\scoop\')
+    - CLI version (`npm --version`) vs Global version (`npm list -g npm`)
+    - Whether npm package updates should be managed or delegated to Scoop
+  - **Automatic Filtering**: npm package excluded from updates if Scoop-managed
+    - Message displayed: "→ Skipping npm (managed by Scoop nodejs-lts)"
+    - Prevents version conflicts when Scoop manages nodejs-lts package
+    - Still shows npm if user explicitly installed global override
+  - All other npm global packages remain unaffected (@anthropic-ai/claude-code, esbuild, etc.)
+
+**UX Improvements:**
+- **Lowercase Checkbox Indicators** - Changed `[X]` → `[x]` throughout for cleaner, more subtle appearance
+  - Updated in 4 locations: Show-CheckboxSelection, Show-InlineBatchSelection, update UI, file browser
+- **npm Cleanup Simplification** - Removed version check/update from cleanup function
+  - Cleanup now only performs cache maintenance (clean + verify)
+  - npm updates handled in proper update workflow (separation of concerns)
+  - Removed "Update npm to latest? (Y/n)" prompt (~45 lines eliminated)
+  - Removed note about Scoop managing npm version
+
+**Bug Fixes:**
+- **Checkbox Visual Artifacts** - Fixed issue where checkbox items appeared at top of screen during global package search
+  - Separated initial draw logic for cursor positioning mode
+  - Initial draw uses simple format, cursor positioning for updates
+  - Prevents orphaned lines when console scrolls
+
+**Code Quality:**
+- **Reduced Duplication**: ~105 lines of duplicate/unnecessary code removed
+- **Improved Maintainability**: Single source of truth for checkbox UI and npm detection
+- **Better Documentation**: Comprehensive function documentation in ARCHITECTURE.md
+- **Separation of Concerns**: Cleanup cleans, updates update, clear responsibilities
+
+**Technical Details:**
+- Console version: 1.12.0 → 1.13.0
+- Config version: config.10 (no schema changes)
+- New function: `Get-NpmInstallInfo` (lines 597-669)
+- Enhanced function: `Show-CheckboxSelection` (lines 1276-1503)
+- npm update check now uses smart filtering (lines 1002-1028)
+
+**Files Changed:**
+- `console.ps1`: Version update, Get-NpmInstallInfo function, enhanced Show-CheckboxSelection, npm filtering, checkbox indicators
+- `ARCHITECTURE.md`: Updated version, documented enhanced functions with examples
+- `CHANGELOG.md`: This entry
+
+### v1.12.0 (2025-12-01)
+
+**Major Release: UI Improvements and Standardization**
+
+This release focuses on user experience improvements, standardization, and better backup tracking.
+
+**New Features:**
+- **About Menu** - Added comprehensive "About" menu accessible from Main Menu
+  - Displays console version, config version, environment indicator
+  - Shows repository link: https://github.com/Gronsten/powershell-console
+  - Shows sponsor link: https://github.com/sponsors/Gronsten
+  - Lists command-line options (--version, --help)
+- **Smart Backup Tracking** - Backup timestamp now reads directly from backup-dev.log
+  - No separate tracking file needed
+  - Only tracks FULL backups (ignores COUNT and TEST modes)
+  - Shows "Last full backup: TIMESTAMP (X days/hours/minutes ago)" in Backup menu
+- **Backup Mode Detection** - backup-dev.ps1 now explicitly logs mode (FULL/TEST/COUNT)
+  - Log format: `=== Backup started: 2025-12-01 12:40:51 | Mode: FULL ===`
+  - Enables reliable detection of backup type
+
+**UX Improvements:**
+- **Environment Indicator** - Hidden for regular users
+  - Only shows `[DEV]` or `[PROD]` when in _dev or _prod directories
+  - Regular users see no environment indicator (cleaner UI)
+- **Shorter Terminal Tab Title** - "PowerShell Console" → "Console"
+  - Fits better in terminal tabs
+  - Still shows environment when applicable: "Console [DEV] v1.12.0"
+- **Standardized Pause Commands** - All pause operations now use `Invoke-StandardPause`
+  - Supports Enter, Esc, and Q keys (previously only "any key")
+  - Updated in 8 menu actions across Main Menu and Package Manager
+  - Better user control and consistency
+- **Enhanced Meraki Backup Menu** - Clear description when launching Meraki backup tool
+
+**Config Changes (config.10):**
+- ❌ **Removed**: `backupLogFile` field (log path is now fixed in backup script)
+- ✅ **Updated**: All menu actions from `pause` to `Invoke-StandardPause`
+- ℹ️ **Version Format Change**: Config version changed from semantic versioning (1.9.0) to prefixed integer (config.10)
+  - Eliminates confusion between console version (1.12.0) and config version (config.10)
+  - Increment by 1 when schema changes (e.g., config.10 → config.11)
+
+**Technical Details:**
+- Console version: 1.11.1 → 1.12.0 (semantic versioning for releases)
+- Config version: 1.9.0 → config.10 (new prefix format for schema versions)
+- `Get-LastBackupTimestamp` now parses mode from log: `| Mode: FULL ===`
+- backup-dev.ps1 writes mode to first line of log for reliable detection
+- Environment detection returns empty string for regular users (not "UNKNOWN")
+
+**Files Changed:**
+- `console.ps1`: Version update, environment logic, About menu, backup timestamp function
+- `config.example.json`: Removed `backupLogFile`, updated pause commands, new config version format
+- `modules/backup-dev/backup-dev.ps1`: Added mode tracking to log output
+- `ARCHITECTURE.md`: Updated all version references, documented new functions
+- `CHANGELOG.md`: This entry
+
 ### v1.11.1 (2025-11-29)
 
 **Bug Fixes: Package Manager UI Improvements**

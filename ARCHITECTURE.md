@@ -1,7 +1,7 @@
 # PowerShell Console - Architecture Guide
 
-**Version:** 1.10.0
-**Last Updated:** 2025-11-20
+**Version:** 1.13.0
+**Last Updated:** 2025-12-01
 **Purpose:** Technical architecture reference for Claude AI assistant sessions
 
 ---
@@ -119,7 +119,7 @@ console.ps1 Execution Flow:
 │ 2. Console Initialization                       │
 │    Lines 80-126                                  │
 │    - UTF-8 encoding setup                       │
-│    - Environment detection (DEV/PROD/UNKNOWN)   │
+│    - Environment detection (DEV/PROD/empty)     │
 │    - Window title configuration                 │
 │    - Original state preservation for cleanup    │
 └────────────────┬────────────────────────────────┘
@@ -162,11 +162,13 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
 } elseif ($scriptPath -match '[\\/]_prod[\\/]?$') {
     $script:Environment = "PROD"      # Green indicator
 } else {
-    $script:Environment = "UNKNOWN"   # Red indicator
+    $script:Environment = ""          # Hidden for regular users
+    $script:EnvColor = "Gray"
 }
 ```
 
-**Display**: `[DEV]` / `[PROD]` / `[UNKNOWN]` in window title and startup banner
+**Display**: `[DEV]` / `[PROD]` in window title and startup banner (only for dev environments)
+**Regular Users**: Environment indicator is hidden (empty string) when not in _dev or _prod directories
 
 ---
 
@@ -280,7 +282,7 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
     }
   },
 
-  "configVersion": "1.9.3"  // Schema version (not app version)
+  "configVersion": "config.10"  // Schema version (prefixed integer format)
 }
 ```
 
@@ -347,9 +349,11 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
 ### Config Version Management
 
 **configVersion field** tracks schema changes:
-- Stored in config.json: `"configVersion": "1.9.3"`
-- Updated when new fields are added to schema
-- upgrade-prod.ps1 uses this to detect schema changes
+- Format: `"config.X"` where X is an integer (e.g., `"config.10"`)
+- Stored in config.json and config.example.json
+- Incremented by 1 when schema changes (adding/removing fields, changing structure)
+- upgrade-prod.ps1 uses this to detect schema changes and merge new fields
+- Separate from console version to avoid confusion (console uses semantic versioning like `1.12.0`)
 - Separate from application version ($script:ConsoleVersion)
 
 **Version Comparison Logic (upgrade-prod.ps1):**
@@ -666,10 +670,10 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
    └─> Expand-Archive -Path $zipPath -DestinationPath $tempPath
 
 4. Detect Version Information
-   ├─> Application Version (from console.ps1 header)
-   │   $script:ConsoleVersion = "1.9.3"
+   ├─> Application Version (from console.ps1)
+   │   $script:ConsoleVersion = "1.12.0"
    └─> Config Schema Version (from config.example.json)
-       "configVersion": "1.9.3"
+       "configVersion": "config.10"
 
 5. Smart Config Merge
    └─> If PROD configVersion != new configVersion:
@@ -691,7 +695,7 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
 7. Update REPOS.md (Automatic)
    └─> Regex replacement of PROD version
        Pattern: (v[\d\.]+ \(DEV\), )v[\d\.]+ \(PROD\)
-       Replace: $1v1.9.3 (PROD)
+       Replace: $1v1.12.0 (PROD)
 
 8. Sync PROD Config to DEV (Automatic)
    └─> Copy-Item $prodPath/config.json $devPath/config.json -Force
@@ -770,8 +774,65 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
 | `Update-Pip` | Update pip packages | Uses `pip list --outdated --format=json` |
 | `Get-InstalledPackages` | List all installed packages | Combines all package managers |
 | `Select-PackagesToUpdate` | Interactive update selection | Checkbox interface |
-| `Show-CheckboxSelection` | Generic checkbox selection UI | Arrow keys + spacebar |
+| `Show-CheckboxSelection` | Centralized checkbox selection UI | Supports Clear-Host/cursor modes, custom key handlers, all items selection |
+| `Show-InlineBatchSelection` | Paginated checkbox selection | Used for winget search with "fetch more" |
 | `Search-Packages` | Search for packages | npm (local DB) + pip (API) |
+
+#### Enhanced Show-CheckboxSelection Function (Line ~1276)
+
+**Purpose:** Centralized, flexible checkbox selection UI used throughout the application for package selection, updates, and file browsing.
+
+**Parameters:**
+- `$Items` (required) - Array of items to display
+- `$Title` (required) - Title shown in header
+- `$Instructions` (optional) - Custom instructions text
+- `$UseClearHost` (switch) - Use Clear-Host redraw instead of cursor positioning
+- `$CustomKeyHandler` (scriptblock) - Custom key handling logic
+- `$CustomInstructions` (hashtable) - Additional instruction lines
+- `$AllowAllItemsSelection` (switch) - Allow selection of items marked as "Installed"
+
+**Features:**
+- **Dual Rendering Modes:**
+  - Cursor positioning (default) - Efficient, no flicker, preserves console history
+  - Clear-Host mode - Simple, works better for complex UIs with multiple sections
+- **Checkbox Indicators:** Uses lowercase `[x]` for selected, `[ ]` for unselected
+- **Installed Item Handling:** Items with `Installed=true` property are:
+  - Displayed in DarkGray
+  - Unselectable by default (unless `AllowAllItemsSelection` is used)
+- **Standard Keys:**
+  - Up/Down arrows - Navigate
+  - Space - Toggle selection
+  - A - Select all (respects installed status)
+  - N - Deselect all
+  - Enter - Confirm
+  - Q - Cancel (returns `$null`)
+- **Custom Key Handlers:** Can inject custom logic via `$CustomKeyHandler` parameter
+- **Return Value:** Array of selected items, or `$null` if cancelled
+
+**Usage Examples:**
+```powershell
+# Basic usage (cursor positioning mode)
+$selected = Show-CheckboxSelection -Items $packages -Title "SELECT PACKAGES"
+
+# Clear-Host mode with all items selectable
+$selected = Show-CheckboxSelection -Items $updates -Title "MANAGE UPDATES" -UseClearHost -AllowAllItemsSelection
+
+# With custom key handler
+$customHandler = {
+    param($Key, [ref]$CurrentIndex, [ref]$SelectedIndexes, [ref]$Done, $Items)
+    if ($Key.Key -eq 'RightArrow') {
+        # Custom logic here
+        return $true  # Indicates key was handled
+    }
+    return $false  # Let standard handler process it
+}
+$selected = Show-CheckboxSelection -Items $items -Title "CUSTOM" -CustomKeyHandler $customHandler
+```
+
+**Refactoring Impact:**
+- Update selection UI (line ~1160) migrated to use this function
+- Reduced code duplication by ~60 lines
+- File browser UI (line ~3850) kept separate due to complex navigation state
 
 ### Menu System Functions (Lines 900-1500)
 
@@ -843,7 +904,9 @@ aws ssm start-session `
 |----------|---------|----------------|
 | `Start-CodeCount` | Count code lines | `python scripts/count-lines.py` |
 | `Start-BackupDevEnvironment` | Backup dev directory | `.\modules\backup-dev\backup-dev.ps1` |
+| `Get-LastBackupTimestamp` | Get last FULL backup timestamp | Reads from `modules/backup-dev/backup-dev.log` (v1.12.0) |
 | `Start-MerakiBackup` | Meraki config backup | External Python script |
+| `Show-AboutMenu` | Display version info and links | Shows console/config versions, repo, sponsor (v1.12.0) |
 
 ### Utility/Helper Functions (Throughout)
 
@@ -1070,7 +1133,7 @@ function Invoke-MyNewFunction {
 **Step 2**: Update configVersion in config.example.json
 ```json
 {
-  "configVersion": "1.10.0"  // Increment from 1.9.3
+  "configVersion": "config.11"  // Increment from config.10
 }
 ```
 
@@ -1189,15 +1252,15 @@ function Get-MyAwsResource {
 
 **Required Changes for Every Release:**
 
-**1. Update console.ps1 header** (line 10):
+**1. Update console.ps1** (line 10):
 ```powershell
-$script:ConsoleVersion = "1.10.0"  # From 1.9.3
+$script:ConsoleVersion = "1.12.0"  # From 1.11.1 (semantic versioning)
 ```
 
 **2. Update config.example.json** (if schema changed):
 ```json
 {
-  "configVersion": "1.10.0"  // Match app version if schema changed
+  "configVersion": "config.10"  // Increment by 1 if schema changed (e.g., config.9 → config.10)
 }
 ```
 
