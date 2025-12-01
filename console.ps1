@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.11.1"
+$script:ConsoleVersion = "1.12.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -18,8 +18,9 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
     $script:Environment = "PROD"
     $script:EnvColor = "Green"
 } else {
-    $script:Environment = "UNKNOWN"
-    $script:EnvColor = "Red"
+    # Regular users don't need environment indicator
+    $script:Environment = ""
+    $script:EnvColor = "Gray"
 }
 
 # Handle double-dash arguments (--version, --help) by checking $MyInvocation
@@ -37,7 +38,9 @@ if ($MyInvocation.Line -match '--version') {
     }
 
     Write-Host ""
-    Write-Host "[$script:Environment] " -ForegroundColor $script:EnvColor -NoNewline
+    if ($script:Environment) {
+        Write-Host "[$script:Environment] " -ForegroundColor $script:EnvColor -NoNewline
+    }
     Write-Host "powershell-console" -ForegroundColor Cyan
     Write-Host "  Console version: " -ForegroundColor Gray -NoNewline
     Write-Host $script:ConsoleVersion -ForegroundColor Cyan
@@ -69,7 +72,9 @@ if ($MyInvocation.Line -match '--help') {
 
 # Handle -Version or -v flag
 if ($Version -or $v) {
-    Write-Host "[$script:Environment] " -ForegroundColor $script:EnvColor -NoNewline
+    if ($script:Environment) {
+        Write-Host "[$script:Environment] " -ForegroundColor $script:EnvColor -NoNewline
+    }
     Write-Host "powershell-console version $script:ConsoleVersion" -ForegroundColor Cyan
     exit 0
 }
@@ -114,11 +119,17 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 # Don't modify PSStyle.OutputRendering - let it stay as ANSI for Oh-My-Posh compatibility
 
 # Set window title with environment indicator
-$host.UI.RawUI.WindowTitle = "PowerShell Console [$script:Environment] v$script:ConsoleVersion"
+if ($script:Environment) {
+    $host.UI.RawUI.WindowTitle = "Console [$script:Environment] v$script:ConsoleVersion"
+} else {
+    $host.UI.RawUI.WindowTitle = "Console v$script:ConsoleVersion"
+}
 
 # Display startup banner with environment indicator
 Write-Host ""
-Write-Host "[$script:Environment] " -ForegroundColor $script:EnvColor -NoNewline
+if ($script:Environment) {
+    Write-Host "[$script:Environment] " -ForegroundColor $script:EnvColor -NoNewline
+}
 Write-Host "PowerShell Console " -ForegroundColor Cyan -NoNewline
 Write-Host "v$script:ConsoleVersion" -ForegroundColor Gray
 Write-Host ""
@@ -3663,7 +3674,10 @@ function Show-ArrowMenu {
 }
 
 function Start-MerakiBackup {
-    Write-Host "Starting Meraki Backup..." -ForegroundColor Green
+    Write-Host "Meraki Backup" -ForegroundColor Cyan
+    Write-Host "=============" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "This will launch the interactive Meraki backup tool." -ForegroundColor Yellow
     Write-Host ""
 
     # Read devRoot from config.json (same as count-lines.py does)
@@ -4016,6 +4030,27 @@ function Get-BackupScriptPath {
 }
 
 # Helper function to execute backup with parameters
+function Get-LastBackupTimestamp {
+    # Read from the actual backup-dev.log file
+    $backupLogPath = Join-Path $PSScriptRoot "modules\backup-dev\backup-dev.log"
+    if (Test-Path $backupLogPath) {
+        try {
+            # Read first line which contains: === Backup started: 2025-12-01 12:40:51 | Mode: FULL ===
+            $firstLine = Get-Content $backupLogPath -First 1
+
+            # Check if this was a FULL backup (not COUNT or TEST)
+            if ($firstLine -match '=== Backup started: (.+?) \| Mode: FULL ===') {
+                $timestampStr = $matches[1]
+                return [DateTime]::Parse($timestampStr)
+            }
+        }
+        catch {
+            return $null
+        }
+    }
+    return $null
+}
+
 function Invoke-BackupScript {
     param(
         [string[]]$Arguments = @(),
@@ -4122,7 +4157,26 @@ function Show-BackupDevMenu {
     $backupMenuItems = Get-MenuFromConfig -MenuTitle "Backup Dev Environment" -DefaultMenuItems $defaultMenu
 
     do {
-        $choice = Show-ArrowMenu -MenuItems $backupMenuItems -Title "Backup Dev Environment"
+        # Get last backup timestamp for header
+        $lastBackup = Get-LastBackupTimestamp
+        $headerLines = @()
+        if ($lastBackup) {
+            $timeAgo = (Get-Date) - $lastBackup
+            if ($timeAgo.Days -gt 0) {
+                $timeAgoStr = "$($timeAgo.Days) day(s) ago"
+            } elseif ($timeAgo.Hours -gt 0) {
+                $timeAgoStr = "$($timeAgo.Hours) hour(s) ago"
+            } else {
+                $timeAgoStr = "$($timeAgo.Minutes) minute(s) ago"
+            }
+            $headerLines = @(
+                "Last full backup: $($lastBackup.ToString('yyyy-MM-dd HH:mm:ss')) ($timeAgoStr)"
+            )
+        } else {
+            $headerLines = @("Last full backup: Never")
+        }
+
+        $choice = Show-ArrowMenu -MenuItems $backupMenuItems -Title "Backup Dev Environment" -HeaderLines $headerLines
 
         if ($choice -eq -1) {
             Write-Host "Returning to Main Menu..." -ForegroundColor Cyan
@@ -6539,6 +6593,62 @@ function Get-FortiGateConfigs {
     Write-Host "  Failed: $failCount" -ForegroundColor $(if ($failCount -gt 0) { "Yellow" } else { "Green" })
     Write-Host "  Output directory: $configOutputDir" -ForegroundColor Cyan
     Write-Host ""
+}
+
+# ==========================================
+# ABOUT MENU
+# ==========================================
+
+function Show-AboutMenu {
+    Clear-Host
+    Write-Host ""
+    Write-Host "===========================================" -ForegroundColor Cyan
+    Write-Host "  About PowerShell Console" -ForegroundColor Cyan
+    Write-Host "===========================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Version Information
+    Write-Host "Version Information:" -ForegroundColor Yellow
+    Write-Host "  Console Version:  " -ForegroundColor Gray -NoNewline
+    Write-Host $script:ConsoleVersion -ForegroundColor White
+
+    # Get config version
+    $configPath = Join-Path $PSScriptRoot "config.json"
+    $configVersion = "unknown"
+    if (Test-Path $configPath) {
+        try {
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+            $configVersion = $config.configVersion
+        } catch {
+            $configVersion = "error"
+        }
+    }
+    Write-Host "  Config Version:   " -ForegroundColor Gray -NoNewline
+    Write-Host $configVersion -ForegroundColor White
+
+    if ($script:Environment) {
+        Write-Host "  Environment:      " -ForegroundColor Gray -NoNewline
+        Write-Host "[$script:Environment]" -ForegroundColor $script:EnvColor
+    }
+    Write-Host ""
+
+    # Links
+    Write-Host "Links:" -ForegroundColor Yellow
+    Write-Host "  Repository:       " -ForegroundColor Gray -NoNewline
+    Write-Host "https://github.com/Gronsten/powershell-console" -ForegroundColor Blue
+    Write-Host "  Sponsor:          " -ForegroundColor Gray -NoNewline
+    Write-Host "https://github.com/sponsors/Gronsten" -ForegroundColor Magenta
+    Write-Host ""
+
+    # Quick Help
+    Write-Host "Command-line Options:" -ForegroundColor Yellow
+    Write-Host "  .\console.ps1 --version    Display version information" -ForegroundColor Gray
+    Write-Host "  .\console.ps1 --help       Display command-line help" -ForegroundColor Gray
+    Write-Host ""
+
+    Write-Host "===========================================" -ForegroundColor Cyan
+    Write-Host ""
+    Invoke-StandardPause
 }
 
 # --- Script Execution Start ---

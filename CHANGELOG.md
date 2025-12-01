@@ -20,6 +20,60 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.12.0 (2025-12-01)
+
+**Major Release: UI Improvements and Standardization**
+
+This release focuses on user experience improvements, standardization, and better backup tracking.
+
+**New Features:**
+- **About Menu** - Added comprehensive "About" menu accessible from Main Menu
+  - Displays console version, config version, environment indicator
+  - Shows repository link: https://github.com/Gronsten/powershell-console
+  - Shows sponsor link: https://github.com/sponsors/Gronsten
+  - Lists command-line options (--version, --help)
+- **Smart Backup Tracking** - Backup timestamp now reads directly from backup-dev.log
+  - No separate tracking file needed
+  - Only tracks FULL backups (ignores COUNT and TEST modes)
+  - Shows "Last full backup: TIMESTAMP (X days/hours/minutes ago)" in Backup menu
+- **Backup Mode Detection** - backup-dev.ps1 now explicitly logs mode (FULL/TEST/COUNT)
+  - Log format: `=== Backup started: 2025-12-01 12:40:51 | Mode: FULL ===`
+  - Enables reliable detection of backup type
+
+**UX Improvements:**
+- **Environment Indicator** - Hidden for regular users
+  - Only shows `[DEV]` or `[PROD]` when in _dev or _prod directories
+  - Regular users see no environment indicator (cleaner UI)
+- **Shorter Terminal Tab Title** - "PowerShell Console" → "Console"
+  - Fits better in terminal tabs
+  - Still shows environment when applicable: "Console [DEV] v1.12.0"
+- **Standardized Pause Commands** - All pause operations now use `Invoke-StandardPause`
+  - Supports Enter, Esc, and Q keys (previously only "any key")
+  - Updated in 8 menu actions across Main Menu and Package Manager
+  - Better user control and consistency
+- **Enhanced Meraki Backup Menu** - Clear description when launching Meraki backup tool
+
+**Config Changes (config.10):**
+- ❌ **Removed**: `backupLogFile` field (log path is now fixed in backup script)
+- ✅ **Updated**: All menu actions from `pause` to `Invoke-StandardPause`
+- ℹ️ **Version Format Change**: Config version changed from semantic versioning (1.9.0) to prefixed integer (config.10)
+  - Eliminates confusion between console version (1.12.0) and config version (config.10)
+  - Increment by 1 when schema changes (e.g., config.10 → config.11)
+
+**Technical Details:**
+- Console version: 1.11.1 → 1.12.0 (semantic versioning for releases)
+- Config version: 1.9.0 → config.10 (new prefix format for schema versions)
+- `Get-LastBackupTimestamp` now parses mode from log: `| Mode: FULL ===`
+- backup-dev.ps1 writes mode to first line of log for reliable detection
+- Environment detection returns empty string for regular users (not "UNKNOWN")
+
+**Files Changed:**
+- `console.ps1`: Version update, environment logic, About menu, backup timestamp function
+- `config.example.json`: Removed `backupLogFile`, updated pause commands, new config version format
+- `modules/backup-dev/backup-dev.ps1`: Added mode tracking to log output
+- `ARCHITECTURE.md`: Updated all version references, documented new functions
+- `CHANGELOG.md`: This entry
+
 ### v1.11.1 (2025-11-29)
 
 **Bug Fixes: Package Manager UI Improvements**

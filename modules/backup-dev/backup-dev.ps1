@@ -111,7 +111,9 @@ $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 $scriptStartTime = Get-Date
 
 # Clear previous detailed log and start new one
-Set-Content -Path $detailedLog -Value "=== Backup started: $timestamp ==="
+# Determine backup mode for log
+$backupMode = if ($countOnly) { "COUNT" } elseif ($testMode) { "TEST" } else { "FULL" }
+Set-Content -Path $detailedLog -Value "=== Backup started: $timestamp | Mode: $backupMode ==="
 
 Write-Host ""
 Write-Separator

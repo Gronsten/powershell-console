@@ -5,7 +5,7 @@
 A comprehensive, interactive PowerShell management console for AWS infrastructure, package managers, development utilities, and system administration. Features multi-account AWS management with Okta SSO, unified package management (Scoop/npm/pip/winget), development environment backups, and network utilities.
 
 > [!TIP]
-> **NEW in v1.9.0:** Automatic IAM role session duration discovery and enhanced AWS Okta sync that maintains all okta.yaml sections while preventing duplicates!
+> **NEW in v1.12.0:** About menu with version info, smart backup tracking (only FULL backups), standardized pause commands, and hidden environment indicator for cleaner UI!
 
 > [!NOTE]
 > **DEV/PROD Environment Separation:** This project uses a dual environment structure (`_dev/` for development, `_prod/` for production) with a smart upgrade script that automatically merges configuration changes while preserving your custom settings.
@@ -113,6 +113,7 @@ A comprehensive, interactive PowerShell management console for AWS infrastructur
 - **Multi-Level Navigation**: ESC to go back one level, Ctrl+X to exit completely
 - **Dynamic Menus**: AWS account menu dynamically generated from Okta sync
 - **Customizable Menus**: Main Menu, Package Manager, and Instance Management menus fully customizable
+- **About Menu**: Version information, repository links, sponsor info, and command-line help
 
 ### Configuration Management
 - **JSON Configuration**: All settings stored in config.json for easy editing
