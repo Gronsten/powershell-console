@@ -81,18 +81,11 @@ A comprehensive, interactive PowerShell management console (6,200+ lines) for:
 │   └── .github/                  # GitHub Actions workflows
 │       └── workflows/
 │
-├── _prod/                         # Production environment (user's daily driver)
-│   ├── console.ps1               # Same as _dev (copied during upgrade)
-│   ├── config.json               # PROD config (preserved during upgrades)
-│   ├── [other files...]          # Mirror of _dev/ structure
-│   └── vpn_output/               # Default VPN config export directory
-│
-└── upgrade-prod.ps1               # Smart upgrade script (not in Git repo)
-    # Features:
-    # - Downloads GitHub releases
-    # - Smart config merge (preserves user values, adds new schema fields)
-    # - Automatic REPOS.md version update
-    # - PROD→DEV config sync (keeps DEV testing current)
+└── _prod/                         # Production environment (user's daily driver)
+    ├── console.ps1               # Same as _dev (stable version)
+    ├── config.json               # PROD config (separate from DEV)
+    ├── [other files...]          # Mirror of _dev/ structure
+    └── vpn_output/               # Default VPN config export directory
 ```
 
 ### File Size Reference
@@ -182,7 +175,6 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
    - Template with placeholder values
    - Defines schema structure
    - Updated with new features in development
-   - Used by upgrade-prod.ps1 for schema reference
 
 2. **config.json** (Git-ignored)
    - User's actual configuration
@@ -352,18 +344,8 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
 - Format: `"config.X"` where X is an integer (e.g., `"config.10"`)
 - Stored in config.json and config.example.json
 - Incremented by 1 when schema changes (adding/removing fields, changing structure)
-- upgrade-prod.ps1 uses this to detect schema changes and merge new fields
 - Separate from console version to avoid confusion (console uses semantic versioning like `1.12.0`)
 - Separate from application version ($script:ConsoleVersion)
-
-**Version Comparison Logic (upgrade-prod.ps1):**
-```powershell
-if ($prodConfigVersion -ne $newConfigVersion) {
-    Write-Host "Config schema update detected" -ForegroundColor Yellow
-    # Merge new fields from config.example.json
-    # Preserve all existing user values
-}
-```
 
 ---
 
@@ -635,115 +617,6 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
   .\modules\backup-dev\backup-dev.ps1 --test-mode
   .\modules\backup-dev\backup-dev.ps1        # Full backup
   ```
-
----
-
-## DEV/PROD Environment Model
-
-### Purpose
-
-**DEV (_dev/)**:
-- Active development environment
-- Git repository location (.git folder)
-- All git operations run from here
-- Config gets stale (never updated directly)
-
-**PROD (_prod/)**:
-- Stable production environment for daily use
-- User's actual working console
-- Config stays current via upgrade script
-- Not a Git repository
-
-### Upgrade Flow
-
-**upgrade-prod.ps1** (parent directory, not in Git):
-
-```
-1. Fetch Release from GitHub
-   └─> gh release view [version] --json tagName,name
-       (Defaults to latest if no version specified)
-
-2. Download Release Archive
-   └─> gh release download $version -p "*.zip" -D $tempPath
-
-3. Extract to Temporary Location
-   └─> Expand-Archive -Path $zipPath -DestinationPath $tempPath
-
-4. Detect Version Information
-   ├─> Application Version (from console.ps1)
-   │   $script:ConsoleVersion = "1.12.0"
-   └─> Config Schema Version (from config.example.json)
-       "configVersion": "config.10"
-
-5. Smart Config Merge
-   └─> If PROD configVersion != new configVersion:
-       ├─> Load PROD config.json (user values)
-       ├─> Load new config.example.json (schema reference)
-       ├─> Merge-Configuration
-       │   ├─> Add NEW fields from example (with placeholder values)
-       │   ├─> Preserve ALL existing user values
-       │   ├─> Track custom fields by category:
-       │   │   ├─> Custom AWS Environments
-       │   │   ├─> Custom Directory Mappings
-       │   │   └─> Other Custom Fields
-       │   └─> Create backup: config.json.backup
-       └─> Display verbose merge summary
-
-6. Copy Files to PROD
-   └─> Selective copy (excludes .git, .github, *.md unless needed)
-
-7. Update REPOS.md (Automatic)
-   └─> Regex replacement of PROD version
-       Pattern: (v[\d\.]+ \(DEV\), )v[\d\.]+ \(PROD\)
-       Replace: $1v1.12.0 (PROD)
-
-8. Sync PROD Config to DEV (Automatic)
-   └─> Copy-Item $prodPath/config.json $devPath/config.json -Force
-       Creates backup first: config.json.backup
-       Purpose: Keeps DEV testing environment current with PROD schema
-```
-
-**Key Features:**
-- **Preserves user customizations** during upgrades
-- **No manual config editing required** (schema changes auto-merged)
-- **Automatic REPOS.md tracking** (no manual version updates)
-- **DEV stays current** (copies PROD config after successful upgrade)
-- **Rollback capability** (creates .backup files)
-
-### Config Merge Categories
-
-**Custom AWS Environments**: User's AWS accounts not in example
-```
-[✓] Custom AWS Environments Preserved (green)
-    - acme-prod (Admin, devops)
-    - acme-dev (Admin)
-```
-
-**Custom Directory Mappings**: awsPromptIndicator.directoryMappings
-```
-[✓] Custom Directory Mappings Preserved (green)
-    - /root/projects/acme-app → 123456789012
-```
-
-**Other Custom Fields**: Any other user additions
-```
-[~] Other Custom Fields Preserved (yellow)
-    - environments.customaccount.customSetting = "value"
-    (Review CHANGELOG.md for guidance on custom fields)
-```
-
-### Why PROD→DEV Sync?
-
-**Problem**: DEV config.json never gets updated during development
-- config.example.json gets new fields
-- DEV config.json stays on old schema
-- Testing doesn't reflect actual user experience
-
-**Solution**: After PROD upgrade succeeds:
-1. PROD config.json has fresh merged schema (all new fields + user values)
-2. Copy PROD config → DEV config (with backup)
-3. DEV environment now matches PROD schema
-4. Testing reflects actual user configuration
 
 ---
 
@@ -1160,8 +1033,6 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "myNewPath" -and
 - Feature description...
 ```
 
-**Result**: upgrade-prod.ps1 will automatically merge this field into user's config during next upgrade
-
 ### 3. Adding a New Environment-Specific Setting
 
 **Step 1**: Add to environment schema in [config.example.json](config.example.json:1)
@@ -1304,33 +1175,6 @@ gh pr create --title "Add new feature (v1.10.0)" --body "..." --base main
 gh release create v1.10.0 \
     --title "v1.10.0 - Feature Name" \
     --notes "Release notes from CHANGELOG.md"
-```
-
-### 7. Testing in DEV vs PROD
-
-**DEV Testing** (_dev/ directory):
-```powershell
-cd /root/AppInstall/dev/powershell-console/_dev
-.\console.ps1
-
-# Window title shows: [DEV] PowerShell Console v1.9.3
-# Banner shows: [DEV] PowerShell Console v1.9.3
-```
-
-**PROD Testing** (_prod/ directory):
-```powershell
-cd /root/AppInstall/dev/powershell-console/_prod
-.\console.ps1
-
-# Window title shows: [PROD] PowerShell Console v1.9.2
-# Banner shows: [PROD] PowerShell Console v1.9.2
-```
-
-**Upgrade PROD to Test New Version**:
-```powershell
-cd /root/AppInstall/dev/powershell-console
-.\upgrade-prod.ps1            # Latest release
-.\upgrade-prod.ps1 -Version v1.9.3  # Specific version
 ```
 
 ---
