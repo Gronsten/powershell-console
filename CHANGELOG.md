@@ -20,6 +20,32 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.13.1 (2025-12-02)
+
+**Bug Fix: Scoop Progress Bar Artifacts + Real-time Progress Display**
+
+**Bug Fixes:**
+- **Fixed Scoop Progress Bar Bleed** - Eliminated visual artifacts during package cleanup
+  - Scoop's progress bars use direct console API calls that bypass PowerShell stream redirection
+  - Changed `scoop cleanup` and `scoop cache rm` commands to run in background jobs
+  - Background jobs completely isolate console output, preventing progress bars from appearing
+  - Maintains clean UI during package manager cleanup operations
+
+**Enhancements:**
+- **Real-time Progress Feedback** - Display cleanup progress from background jobs
+  - Polls job output every 100ms to capture Scoop's cleanup messages
+  - Shows "• Removing [app] [version]" for each package being cleaned
+  - Cache removal shows file count updates every 10 files removed
+  - Provides user feedback without exposing progress bar artifacts
+  - Clean, readable progress display using Gray text with bullet points
+
+**Technical Details:**
+- **Problem**: Scoop writes progress bars using `[Console]::Write()` or VT100 escape sequences
+- **Why stream redirection failed**: `2>&1 | Out-Null` only captures PowerShell streams, not direct console writes
+- **Solution**: `Start-Job { scoop cleanup * 2>&1 }` runs in separate process with isolated console
+- **Progress capture**: `Receive-Job` polls output stream and parses "Removing" messages
+- **Performance**: Negligible overhead (~1-2 seconds) for operations that already take 10+ seconds
+
 ### v1.13.0 (2025-12-01)
 
 **Major Release: Checkbox UI Centralization and Smart npm Management**
