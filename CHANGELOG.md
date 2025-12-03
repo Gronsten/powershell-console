@@ -20,6 +20,50 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.13.2 (2025-12-03)
+
+**Code Cleanup: Remove Dead Code & Simplify Package Manager Cleanup**
+
+This release significantly reduces code complexity by removing unused functions and simplifying the package manager cleanup workflow.
+
+**Code Cleanup:**
+- **Removed 6 Orphaned Update Functions** - Eliminated unused package update functions (364 lines removed)
+  - Removed `Update-Check` - Never called, duplicate functionality of Select-PackagesToUpdate
+  - Removed `Update-All` - Never called, no menu integration
+  - Removed `Update-Scoop` - Only called by removed Update-All
+  - Removed `Update-npm` - Only called by removed Update-All
+  - Removed `Update-Winget` - Never called anywhere
+  - Removed `Update-Pip` - Only called by removed Update-All
+  - All functionality consolidated in `Select-PackagesToUpdate` (Manage Updates menu)
+
+**Bug Fixes:**
+- **Fixed Scoop Cleanup** - Removed duplicate cache clear and fixed prompt flow
+  - Cache clear now only runs when user explicitly confirms (y/N prompt)
+  - Previously ran automatically then asked for confirmation (redundant)
+  - Updated prompt: "Clear cache (removes cached installers)? (y/N)"
+- **Fixed Update-All Parameter Bug** - Removed invalid `$SkipCleanup` parameter usage
+  - Update-All was passing parameter to Update-Scoop which no longer accepted it
+  - Would have caused error if Update-All was ever called (it wasn't)
+
+**Simplification:**
+- **Simplified Package Manager Cleanup** - Replaced complex background job logic with direct commands
+  - Removed 60+ lines of background job polling and output parsing code
+  - Scoop now displays native progress bars directly (cleaner, more informative)
+  - Cache clear operations moved from update functions to cleanup menu
+  - Cleanup operations now properly separated from update operations
+
+**Technical Details:**
+- Net code reduction: 364 lines removed (389 deletions, 25 additions)
+- Functions kept: `Get-NpmInstallInfo`, `Get-InstalledPackages`, `Select-PackagesToUpdate`
+- Package update workflow: All handled by `Select-PackagesToUpdate` (checkbox UI for all 4 managers)
+- Cleanup workflow: Direct command execution in `Invoke-PackageManagerCleanup`
+
+**Impact:**
+- Simpler, more maintainable codebase
+- Clearer separation between updates and cleanup operations
+- Better UX with native progress displays
+- No functionality lost - all features still available via Manage Updates menu
+
 ### v1.13.1 (2025-12-02)
 
 **Bug Fix: Scoop Progress Bar Artifacts + Real-time Progress Display**
