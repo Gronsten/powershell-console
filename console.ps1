@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.13.0"
+$script:ConsoleVersion = "1.13.1"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -2921,9 +2921,36 @@ function Invoke-PackageManagerCleanup {
             Write-Host ""
 
             # Run scoop cleanup for all apps (removes old versions)
-            Write-Host "  Cleaning up old versions (this may take a moment)..." -ForegroundColor Cyan
-            # Suppress ALL output including progress bars by redirecting to Out-Null in a pipeline
-            scoop cleanup * --cache 2>&1 3>&1 4>&1 5>&1 6>&1 | Out-Null
+            Write-Host "  Cleaning up old versions..." -ForegroundColor Cyan
+            # Use background job to completely isolate console output (prevents progress bar artifacts)
+            $job = Start-Job { scoop cleanup * --cache 2>&1 }
+
+            # Poll job output and display progress
+            while ($job.State -eq 'Running') {
+                $output = Receive-Job $job 2>&1
+                if ($output) {
+                    $output | ForEach-Object {
+                        $line = $_.ToString()
+                        if ($line -match 'Removing\s+(.+):\s+(.+)') {
+                            Write-Host "    • $($matches[1]): $($matches[2])" -ForegroundColor Gray
+                        }
+                    }
+                }
+                Start-Sleep -Milliseconds 100
+            }
+
+            # Get any remaining output
+            $output = Receive-Job $job 2>&1
+            if ($output) {
+                $output | ForEach-Object {
+                    $line = $_.ToString()
+                    if ($line -match 'Removing\s+(.+):\s+(.+)') {
+                        Write-Host "    • $($matches[1]): $($matches[2])" -ForegroundColor Gray
+                    }
+                }
+            }
+
+            $job | Remove-Job
             Write-Host "  ✅ Old versions cleaned" -ForegroundColor Green
             Write-Host ""
 
@@ -2932,8 +2959,33 @@ function Invoke-PackageManagerCleanup {
             $wipeCacheResponse = Read-Host
             if ($wipeCacheResponse -match '^[Yy]') {
                 Write-Host "  Removing all cached installers..." -ForegroundColor Cyan
-                # Suppress ALL output including progress bars
-                scoop cache rm * 2>&1 3>&1 4>&1 5>&1 6>&1 | Out-Null
+                # Use background job to completely isolate console output (prevents progress bar artifacts)
+                $job = Start-Job { scoop cache rm * 2>&1 }
+
+                # Poll job output and display progress
+                $removeCount = 0
+                while ($job.State -eq 'Running') {
+                    $output = Receive-Job $job 2>&1
+                    if ($output) {
+                        $output | ForEach-Object {
+                            if ($_ -match 'Removing') {
+                                $removeCount++
+                                if ($removeCount % 10 -eq 0) {
+                                    Write-Host "    • Removed $removeCount files..." -ForegroundColor Gray
+                                }
+                            }
+                        }
+                    }
+                    Start-Sleep -Milliseconds 100
+                }
+
+                # Get any remaining output
+                $output = Receive-Job $job 2>&1
+                if ($output -and $removeCount -gt 0) {
+                    Write-Host "    • Removed $removeCount total files" -ForegroundColor Gray
+                }
+
+                $job | Remove-Job
                 Write-Host "  ✅ Scoop cache cleared" -ForegroundColor Green
             } else {
                 Write-Host "  Skipping full cache wipe" -ForegroundColor Gray
