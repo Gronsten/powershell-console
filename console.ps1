@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.13.1"
+$script:ConsoleVersion = "1.13.2"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -424,176 +424,6 @@ $global:MenuPositionMemory = @{}
 # PACKAGE MANAGER UPDATE AUTOMATION
 # ==========================================
 
-function Update-Check {
-    [CmdletBinding()]
-    param()
-
-    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║  CHECKING FOR PACKAGE UPDATES              ║" -ForegroundColor Cyan
-    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
-
-    # Check Scoop
-    Write-Host "📦 Scoop packages:" -ForegroundColor Yellow
-    try {
-        # First, refresh bucket metadata (this is required for accurate status)
-        Write-Host "  → Refreshing bucket metadata..." -ForegroundColor Gray
-        $null = scoop update 2>&1
-
-        # Now check status with fresh data
-        $scoopStatus = scoop status 2>&1 | Out-String
-
-        # Check if everything is up to date
-        if ($scoopStatus -match "Latest versions for all apps are installed") {
-            Write-Host "  ✅ All Scoop packages up to date" -ForegroundColor Green
-        } else {
-            # Parse status output and filter out "Install failed" entries
-            $lines = $scoopStatus -split "`n"
-            $hasUpdates = $false
-
-            foreach ($line in $lines) {
-                # Skip lines with "Install failed" as these need manual intervention
-                if ($line -match "Install failed") {
-                    Write-Host "  ⚠️  $($line.Trim())" -ForegroundColor Yellow
-                    Write-Host "      Run 'scoop uninstall <app>' and 'scoop install <app>' to fix" -ForegroundColor DarkYellow
-                } elseif ($line.Trim() -and $line -notmatch "^Scoop is up to date") {
-                    Write-Host "  $line" -ForegroundColor White
-                    $hasUpdates = $true
-                }
-            }
-
-            if (-not $hasUpdates -and $scoopStatus -notmatch "Install failed") {
-                Write-Host "  ✅ All Scoop packages up to date" -ForegroundColor Green
-            }
-        }
-    } catch {
-        Write-Host "  ⚠️  Scoop not found or error checking status" -ForegroundColor Red
-    }
-
-    # Check npm global packages
-    Write-Host "`n📦 npm global packages:" -ForegroundColor Yellow
-    try {
-        $npmOutdated = npm outdated -g 2>&1
-        if ([string]::IsNullOrWhiteSpace($npmOutdated)) {
-            Write-Host "  ✅ All npm global packages up to date" -ForegroundColor Green
-        } else {
-            $npmOutdated
-        }
-    } catch {
-        Write-Host "  ⚠️  npm not found or error checking status" -ForegroundColor Red
-    }
-
-    # Check pip packages
-    Write-Host "`n📦 pip packages:" -ForegroundColor Yellow
-    try {
-        # Check if Python is available
-        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-        if (-not $pythonCmd) {
-            Write-Host "  ⚠️  Python not found" -ForegroundColor Red
-        } else {
-            # Check for outdated pip packages
-            $pipOutdated = pip list --outdated 2>&1 | Out-String
-            if ($pipOutdated -match "Package\s+Version\s+Latest") {
-                $pipOutdated -split "`n" | ForEach-Object {
-                    # Skip notice lines and empty lines
-                    if ($_.Trim() -and $_ -notmatch '^\[notice\]') {
-                        Write-Host "  $_" -ForegroundColor White
-                    }
-                }
-            } else {
-                Write-Host "  ✅ All pip packages up to date" -ForegroundColor Green
-            }
-        }
-    } catch {
-        Write-Host "  ⚠️  pip not found or error checking status" -ForegroundColor Red
-    }
-
-    # Check winget packages
-    Write-Host "`n📦 winget packages:" -ForegroundColor Yellow
-    try {
-        # Capture winget output properly, filtering out progress bars
-        $wingetUpgrades = winget upgrade 2>&1 | Out-String
-        if ($wingetUpgrades -match "No installed package found" -or $wingetUpgrades -match "No applicable updates found") {
-            Write-Host "  ✅ All winget packages up to date" -ForegroundColor Green
-        } else {
-            # Filter out ANSI escape sequences and progress indicators
-            $wingetUpgrades -split "`n" | ForEach-Object {
-                $line = $_
-                # Skip empty lines and progress indicators
-                if ($line.Trim() -and $line -notmatch '^\s*[\-\\/\|]\s*$') {
-                    Write-Host $line -ForegroundColor White
-                }
-            }
-        }
-    } catch {
-        Write-Host "  ⚠️  winget not found or error checking status" -ForegroundColor Red
-    }
-
-    Write-Host "`n💡 Use 'Update All Packages' menu option to install updates" -ForegroundColor Cyan
-    Write-Host "💡 Or use 'Select Updates to Install' to choose specific packages`n" -ForegroundColor Cyan
-}
-
-function Update-All {
-    [CmdletBinding()]
-    param(
-        [switch]$SkipCleanup
-    )
-
-    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Magenta
-    Write-Host "║  UPDATING ALL PACKAGES                     ║" -ForegroundColor Magenta
-    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Magenta
-
-    $startTime = Get-Date
-
-    # Update Scoop
-    Update-Scoop -SkipCleanup:$SkipCleanup
-
-    # Update npm
-    Update-npm
-
-    # Update pip
-    Update-Pip
-
-    $endTime = Get-Date
-    $duration = $endTime - $startTime
-
-    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Green
-    Write-Host "║  ✅ ALL UPDATES COMPLETE                   ║" -ForegroundColor Green
-    Write-Host "╚════════════════════════════════════════════╝" -ForegroundColor Green
-    Write-Host "⏱️  Total time: $($duration.TotalSeconds) seconds`n" -ForegroundColor Cyan
-}
-
-function Update-Scoop {
-    [CmdletBinding()]
-    param(
-        [switch]$SkipCleanup
-    )
-
-    Write-Host "`n🔄 Updating Scoop packages..." -ForegroundColor Cyan
-
-    try {
-        # Update Scoop itself first
-        Write-Host "  → Updating Scoop..." -ForegroundColor Gray
-        scoop update
-
-        # Update all apps
-        Write-Host "  → Updating all apps..." -ForegroundColor Gray
-        scoop update *
-
-        # Cleanup old versions (unless skipped)
-        if (-not $SkipCleanup) {
-            Write-Host "  → Cleaning up old versions..." -ForegroundColor Gray
-            scoop cleanup * -k
-
-            Write-Host "  → Clearing cache..." -ForegroundColor Gray
-            scoop cache rm *
-        }
-
-        Write-Host "✅ Scoop packages updated" -ForegroundColor Green
-    } catch {
-        Write-Host "❌ Error updating Scoop: $_" -ForegroundColor Red
-    }
-}
-
 function Get-NpmInstallInfo {
     <#
     .SYNOPSIS
@@ -666,100 +496,6 @@ function Get-NpmInstallInfo {
     }
 
     return $result
-}
-
-function Update-npm {
-    [CmdletBinding()]
-    param()
-
-    Write-Host "`n🔄 Updating npm global packages..." -ForegroundColor Cyan
-
-    try {
-        # Check what's outdated first
-        Write-Host "  → Checking for updates..." -ForegroundColor Gray
-        $outdated = npm outdated -g 2>&1
-
-        if ([string]::IsNullOrWhiteSpace($outdated)) {
-            Write-Host "  ✅ All npm packages already up to date" -ForegroundColor Green
-        } else {
-            Write-Host "  → Updating packages..." -ForegroundColor Gray
-            npm update -g
-
-            Write-Host "  → Clearing cache..." -ForegroundColor Gray
-            npm cache clean --force
-
-            Write-Host "✅ npm packages updated" -ForegroundColor Green
-        }
-    } catch {
-        Write-Host "❌ Error updating npm: $_" -ForegroundColor Red
-    }
-}
-
-function Update-Winget {
-    [CmdletBinding()]
-    param()
-
-    Write-Host "`n🔄 Checking winget packages..." -ForegroundColor Cyan
-
-    try {
-        Write-Host "  → Checking for updates..." -ForegroundColor Gray
-        winget upgrade
-
-        Write-Host "`n💡 Use 'winget upgrade --all' to install updates" -ForegroundColor Yellow
-        Write-Host "💡 Or 'winget upgrade <package>' for specific package`n" -ForegroundColor Yellow
-    } catch {
-        Write-Host "❌ Error checking winget: $_" -ForegroundColor Red
-    }
-}
-
-function Update-Pip {
-    [CmdletBinding()]
-    param()
-
-    Write-Host "`n🔄 Updating pip packages..." -ForegroundColor Cyan
-
-    try {
-        # Check if Python is available
-        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-        if (-not $pythonCmd) {
-            Write-Host "  ⚠️  Python not found" -ForegroundColor Red
-            return
-        }
-
-        # Update pip itself first
-        Write-Host "  → Updating pip..." -ForegroundColor Gray
-        python.exe -m pip install --upgrade pip
-
-        # Check what's outdated
-        Write-Host "  → Checking for outdated packages..." -ForegroundColor Gray
-        $outdated = pip list --outdated 2>&1 | Out-String
-
-        # Parse outdated output to see if there are packages to update
-        if ($outdated -match "Package\s+Version\s+Latest") {
-            # Extract package names (skip header and separator lines)
-            $outdatedLines = $outdated -split "`n" | Where-Object {
-                $_ -match '^\S+\s+\S+\s+\S+' -and $_ -notmatch '^(Package|---)'
-            }
-
-            if ($outdatedLines.Count -gt 0) {
-                Write-Host "  → Updating packages..." -ForegroundColor Gray
-                foreach ($line in $outdatedLines) {
-                    if ($line -match '^(\S+)') {
-                        $packageName = $matches[1]
-                        Write-Host "    Updating $packageName..." -ForegroundColor Gray
-                        pip install --upgrade --upgrade-strategy only-if-needed $packageName 2>&1 | Out-Null
-                    }
-                }
-                Write-Host "✅ pip packages updated" -ForegroundColor Green
-            } else {
-                Write-Host "  ✅ All pip packages already up to date" -ForegroundColor Green
-            }
-        } else {
-            Write-Host "  ✅ All pip packages already up to date" -ForegroundColor Green
-        }
-    } catch {
-        Write-Host "❌ Error updating pip: $_" -ForegroundColor Red
-    }
 }
 
 function Get-InstalledPackages {
@@ -2922,71 +2658,17 @@ function Invoke-PackageManagerCleanup {
 
             # Run scoop cleanup for all apps (removes old versions)
             Write-Host "  Cleaning up old versions..." -ForegroundColor Cyan
-            # Use background job to completely isolate console output (prevents progress bar artifacts)
-            $job = Start-Job { scoop cleanup * --cache 2>&1 }
-
-            # Poll job output and display progress
-            while ($job.State -eq 'Running') {
-                $output = Receive-Job $job 2>&1
-                if ($output) {
-                    $output | ForEach-Object {
-                        $line = $_.ToString()
-                        if ($line -match 'Removing\s+(.+):\s+(.+)') {
-                            Write-Host "    • $($matches[1]): $($matches[2])" -ForegroundColor Gray
-                        }
-                    }
-                }
-                Start-Sleep -Milliseconds 100
-            }
-
-            # Get any remaining output
-            $output = Receive-Job $job 2>&1
-            if ($output) {
-                $output | ForEach-Object {
-                    $line = $_.ToString()
-                    if ($line -match 'Removing\s+(.+):\s+(.+)') {
-                        Write-Host "    • $($matches[1]): $($matches[2])" -ForegroundColor Gray
-                    }
-                }
-            }
-
-            $job | Remove-Job
+            scoop cleanup * -k
             Write-Host "  ✅ Old versions cleaned" -ForegroundColor Green
             Write-Host ""
 
-            # Ask about wiping cache completely
-            Write-Host "  Remove cache completely (includes current installers)? (y/N): " -ForegroundColor Yellow -NoNewline
+            # Ask about clearing cache
+            Write-Host "  Clear cache (removes cached installers)? (y/N): " -ForegroundColor Yellow -NoNewline
             $wipeCacheResponse = Read-Host
             if ($wipeCacheResponse -match '^[Yy]') {
                 Write-Host "  Removing all cached installers..." -ForegroundColor Cyan
-                # Use background job to completely isolate console output (prevents progress bar artifacts)
-                $job = Start-Job { scoop cache rm * 2>&1 }
-
-                # Poll job output and display progress
-                $removeCount = 0
-                while ($job.State -eq 'Running') {
-                    $output = Receive-Job $job 2>&1
-                    if ($output) {
-                        $output | ForEach-Object {
-                            if ($_ -match 'Removing') {
-                                $removeCount++
-                                if ($removeCount % 10 -eq 0) {
-                                    Write-Host "    • Removed $removeCount files..." -ForegroundColor Gray
-                                }
-                            }
-                        }
-                    }
-                    Start-Sleep -Milliseconds 100
-                }
-
-                # Get any remaining output
-                $output = Receive-Job $job 2>&1
-                if ($output -and $removeCount -gt 0) {
-                    Write-Host "    • Removed $removeCount total files" -ForegroundColor Gray
-                }
-
-                $job | Remove-Job
-                Write-Host "  ✅ Scoop cache cleared" -ForegroundColor Green
+                scoop cache rm *
+                Write-Host "  ✅ Scoop cache completely cleared" -ForegroundColor Green
             } else {
                 Write-Host "  Skipping full cache wipe" -ForegroundColor Gray
             }
