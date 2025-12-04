@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """Fast line counter for projects with exclusion visibility.
 
 Shows line counts per project with inline exclusion indicators:
