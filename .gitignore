@@ -48,6 +48,7 @@ PSReadLine/
 # Backup files
 *.bak
 *.backup
+*.backup_*
 *.old
 *.orig
 

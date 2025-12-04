@@ -37,10 +37,8 @@ import sys
 import json
 import fnmatch
 import argparse
-import shutil
 from pathlib import Path
 from collections import defaultdict
-from datetime import datetime
 import time
 
 # Global variable to store exclusion config
@@ -269,13 +267,6 @@ def count_project_lines(base_path: Path, dev_root: Path = None, exclusion_config
     print(f"Legend: {WHITE}Normal text{RESET} = included, {GRAY}Gray{RESET} = excluded | Format: X(f)=files, X(d)=dirs")
     print("="*80)
 
-def backup_config(config_path: Path) -> Path:
-    """Create a backup of config.json before modifications."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = config_path.parent / f"config.json.backup_{timestamp}"
-    shutil.copy2(config_path, backup_path)
-    return backup_path
-
 def save_config(config_path: Path, config: dict) -> bool:
     """Save configuration to config.json with pretty formatting."""
     try:
@@ -375,10 +366,6 @@ def add_global_extension(config_path: Path, extension: str) -> bool:
             print(f"Extension '{ext}' already excluded")
             return False
 
-        # Backup before modification
-        backup_path = backup_config(config_path)
-        print(f"Config backed up to: {backup_path.name}")
-
         extensions.append(ext)
         extensions.sort()
 
@@ -414,10 +401,6 @@ def add_global_pattern(config_path: Path, pattern: str) -> bool:
             print(f"Pattern '{pattern}' already excluded")
             return False
 
-        # Backup before modification
-        backup_path = backup_config(config_path)
-        print(f"Config backed up to: {backup_path.name}")
-
         patterns.append(pattern)
         patterns.sort()
 
@@ -445,10 +428,6 @@ def remove_global_extension(config_path: Path, extension: str) -> bool:
             print(f"Extension '{ext}' not found in exclusions")
             return False
 
-        # Backup before modification
-        backup_path = backup_config(config_path)
-        print(f"Config backed up to: {backup_path.name}")
-
         extensions.remove(ext)
 
         if save_config(config_path, config):
@@ -474,10 +453,6 @@ def remove_global_pattern(config_path: Path, pattern: str) -> bool:
         if pattern not in patterns:
             print(f"Pattern '{pattern}' not found in exclusions")
             return False
-
-        # Backup before modification
-        backup_path = backup_config(config_path)
-        print(f"Config backed up to: {backup_path.name}")
 
         patterns.remove(pattern)
 
