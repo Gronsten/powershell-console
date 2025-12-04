@@ -20,6 +20,22 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.13.3 (2025-12-04)
+
+**Config Changes Required:**
+- Added `.zip`, `.csv`, `.conf` to `lineCounter.globalExclusions.extensions`
+- Added `backup` to `lineCounter.globalExclusions.pathPatterns`
+- Config version: `config.10` → `config.11`
+
+**Bug Fixes:**
+- **Fixed count-lines Missing File Types** - Restored ignored file types that were lost
+  - Added `.zip` files to global exclusions (archive files)
+  - Added `.csv` files to global exclusions (data files)
+  - Added `.conf` files to global exclusions (configuration files)
+  - Added `backup` path pattern to global exclusions (backup directories)
+  - Note: `.vhdx`, `.avhdx`, and `.vsix` were already present
+  - These files are now excluded from line counts across all projects by default
+
 ### v1.13.2 (2025-12-03)
 
 **Code Cleanup: Remove Dead Code & Simplify Package Manager Cleanup**
