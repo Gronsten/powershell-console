@@ -90,7 +90,8 @@ pip-log.txt
 # TODO.md
 # NOTES.md
 
-# Test files
+# Test files and directory
+_test/
 test_*.ps1
 *_test.ps1
 test-*.ps1
