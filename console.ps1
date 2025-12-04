@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.13.2"
+$script:ConsoleVersion = "1.13.3"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -3617,8 +3617,11 @@ function Start-CodeCount {
             }
         }
 
-        # Add files
-        Get-ChildItem $currentPath -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike ".*" } | Sort-Object Name | ForEach-Object {
+        # Add files (excluding common binary/excluded types that shouldn't be counted)
+        $excludedExtensions = @('.vhdx', '.avhdx', '.vsix', '.zip', '.csv', '.log', '.exe', '.dll', '.bin', '.iso')
+        Get-ChildItem $currentPath -File -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -notlike ".*" -and $excludedExtensions -notcontains $_.Extension.ToLower()
+        } | Sort-Object Name | ForEach-Object {
             $menuOptions += [PSCustomObject]@{
                 Name = "📄 $($_.Name)"
                 Path = $_.FullName

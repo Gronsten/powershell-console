@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """Fast line counter for projects with exclusion visibility.
 
 Shows line counts per project with inline exclusion indicators:
@@ -10,19 +10,33 @@ Exclusion rules are configured in config.json under the 'lineCounter' section.
 
 Usage:
     python count-lines.py [PATH]
+    python count-lines.py --show-exclusions
+    python count-lines.py --manage
+    python count-lines.py --add-ext .zip --add-pattern backup
 
 Arguments:
-    PATH    Optional path to analyze (default: devRoot from config.json)
+    PATH                  Optional path to analyze (default: devRoot from config.json)
+    --show-exclusions     Display current exclusion configuration
+    --manage              Launch interactive exclusion manager
+    --add-ext EXT         Add global extension exclusion (e.g., .zip)
+    --add-pattern PAT     Add global path pattern exclusion (e.g., backup)
+    --remove-ext EXT      Remove global extension exclusion
+    --remove-pattern PAT  Remove global path pattern exclusion
 
 Examples:
     python count-lines.py
     python count-lines.py C:\\Projects\\myapp
+    python count-lines.py --show-exclusions
+    python count-lines.py --add-ext .zip
+    python count-lines.py --add-ext .zip --add-pattern backup
+    python count-lines.py --manage
 """
 
 import os
 import sys
 import json
 import fnmatch
+import argparse
 from pathlib import Path
 from collections import defaultdict
 import time
@@ -253,27 +267,336 @@ def count_project_lines(base_path: Path, dev_root: Path = None, exclusion_config
     print(f"Legend: {WHITE}Normal text{RESET} = included, {GRAY}Gray{RESET} = excluded | Format: X(f)=files, X(d)=dirs")
     print("="*80)
 
+def save_config(config_path: Path, config: dict) -> bool:
+    """Save configuration to config.json with pretty formatting."""
+    try:
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Error saving config: {e}")
+        return False
+
+def validate_extension(ext: str) -> str:
+    """Validate and normalize extension format."""
+    ext = ext.strip()
+    if not ext.startswith('.'):
+        ext = '.' + ext
+    return ext.lower()
+
+def show_exclusions(config: dict):
+    """Display current exclusion configuration."""
+    line_counter = config.get('lineCounter', {})
+    global_ex = line_counter.get('globalExclusions', {})
+    project_ex = line_counter.get('projectExclusions', {})
+
+    print("\n" + "="*80)
+    print("COUNT-LINES EXCLUSION CONFIGURATION")
+    print("="*80)
+
+    # Global Exclusions
+    print("\nGLOBAL EXCLUSIONS (Applied to all projects):")
+    print("-" * 80)
+
+    extensions = global_ex.get('extensions', [])
+    patterns = global_ex.get('pathPatterns', [])
+
+    if extensions:
+        print(f"\n  Extensions ({len(extensions)}):")
+        for ext in sorted(extensions):
+            print(f"    • {ext}")
+    else:
+        print("\n  Extensions: None")
+
+    if patterns:
+        print(f"\n  Path Patterns ({len(patterns)}):")
+        for pattern in sorted(patterns):
+            print(f"    • {pattern}")
+    else:
+        print("\n  Path Patterns: None")
+
+    # Project-Specific Exclusions
+    if project_ex:
+        print(f"\n\nPROJECT-SPECIFIC EXCLUSIONS ({len(project_ex)} projects):")
+        print("-" * 80)
+
+        for project, rules in sorted(project_ex.items()):
+            print(f"\n  {project}:")
+
+            if rules.get('excludeAll'):
+                print("    [!] ENTIRE PROJECT EXCLUDED")
+                continue
+
+            if rules.get('includeOnly'):
+                print(f"    Include Only: {', '.join(rules['includeOnly'])}")
+                continue
+
+            if rules.get('extensions'):
+                print(f"    Extensions: {', '.join(rules['extensions'])}")
+            if rules.get('files'):
+                print(f"    Files: {', '.join(rules['files'])}")
+            if rules.get('filePatterns'):
+                print(f"    Patterns: {', '.join(rules['filePatterns'])}")
+            if rules.get('pathPatterns'):
+                print(f"    Paths: {', '.join(rules['pathPatterns'])}")
+    else:
+        print("\n\nPROJECT-SPECIFIC EXCLUSIONS: None")
+
+    print("\n" + "="*80)
+
+def add_global_extension(config_path: Path, extension: str) -> bool:
+    """Add a global extension exclusion."""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        ext = validate_extension(extension)
+
+        # Ensure lineCounter structure exists
+        if 'lineCounter' not in config:
+            config['lineCounter'] = {}
+        if 'globalExclusions' not in config['lineCounter']:
+            config['lineCounter']['globalExclusions'] = {}
+        if 'extensions' not in config['lineCounter']['globalExclusions']:
+            config['lineCounter']['globalExclusions']['extensions'] = []
+
+        extensions = config['lineCounter']['globalExclusions']['extensions']
+
+        if ext in extensions:
+            print(f"Extension '{ext}' already excluded")
+            return False
+
+        extensions.append(ext)
+        extensions.sort()
+
+        if save_config(config_path, config):
+            print(f"[+] Added extension: {ext}")
+            return True
+        else:
+            return False
+
+    except Exception as e:
+        print(f"Error adding extension: {e}")
+        return False
+
+def add_global_pattern(config_path: Path, pattern: str) -> bool:
+    """Add a global path pattern exclusion."""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        pattern = pattern.strip().lower()
+
+        # Ensure lineCounter structure exists
+        if 'lineCounter' not in config:
+            config['lineCounter'] = {}
+        if 'globalExclusions' not in config['lineCounter']:
+            config['lineCounter']['globalExclusions'] = {}
+        if 'pathPatterns' not in config['lineCounter']['globalExclusions']:
+            config['lineCounter']['globalExclusions']['pathPatterns'] = []
+
+        patterns = config['lineCounter']['globalExclusions']['pathPatterns']
+
+        if pattern in patterns:
+            print(f"Pattern '{pattern}' already excluded")
+            return False
+
+        patterns.append(pattern)
+        patterns.sort()
+
+        if save_config(config_path, config):
+            print(f"[+] Added pattern: {pattern}")
+            return True
+        else:
+            return False
+
+    except Exception as e:
+        print(f"Error adding pattern: {e}")
+        return False
+
+def remove_global_extension(config_path: Path, extension: str) -> bool:
+    """Remove a global extension exclusion."""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        ext = validate_extension(extension)
+
+        extensions = config.get('lineCounter', {}).get('globalExclusions', {}).get('extensions', [])
+
+        if ext not in extensions:
+            print(f"Extension '{ext}' not found in exclusions")
+            return False
+
+        extensions.remove(ext)
+
+        if save_config(config_path, config):
+            print(f"[-] Removed extension: {ext}")
+            return True
+        else:
+            return False
+
+    except Exception as e:
+        print(f"Error removing extension: {e}")
+        return False
+
+def remove_global_pattern(config_path: Path, pattern: str) -> bool:
+    """Remove a global path pattern exclusion."""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        pattern = pattern.strip().lower()
+
+        patterns = config.get('lineCounter', {}).get('globalExclusions', {}).get('pathPatterns', [])
+
+        if pattern not in patterns:
+            print(f"Pattern '{pattern}' not found in exclusions")
+            return False
+
+        patterns.remove(pattern)
+
+        if save_config(config_path, config):
+            print(f"[-] Removed pattern: {pattern}")
+            return True
+        else:
+            return False
+
+    except Exception as e:
+        print(f"Error removing pattern: {e}")
+        return False
+
+def interactive_manage(config_path: Path):
+    """Launch interactive exclusion manager."""
+    while True:
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+        except Exception as e:
+            print(f"Error loading config: {e}")
+            return
+
+        print("\n" + "="*80)
+        print("COUNT-LINES EXCLUSION MANAGER")
+        print("="*80)
+        print("\n1. View current exclusions")
+        print("2. Add global extension exclusion")
+        print("3. Add global path pattern exclusion")
+        print("4. Remove global extension exclusion")
+        print("5. Remove global path pattern exclusion")
+        print("0. Exit")
+        print("\n" + "-"*80)
+
+        choice = input("Your choice: ").strip()
+
+        if choice == '0':
+            print("\nExiting exclusion manager.")
+            break
+        elif choice == '1':
+            show_exclusions(config)
+        elif choice == '2':
+            ext = input("Enter extension to exclude (e.g., .zip or zip): ").strip()
+            if ext:
+                add_global_extension(config_path, ext)
+        elif choice == '3':
+            pattern = input("Enter path pattern to exclude (e.g., backup, logs): ").strip()
+            if pattern:
+                add_global_pattern(config_path, pattern)
+        elif choice == '4':
+            ext = input("Enter extension to remove (e.g., .zip or zip): ").strip()
+            if ext:
+                remove_global_extension(config_path, ext)
+        elif choice == '5':
+            pattern = input("Enter path pattern to remove (e.g., backup, logs): ").strip()
+            if pattern:
+                remove_global_pattern(config_path, pattern)
+        else:
+            print("Invalid choice. Please try again.")
+
 if __name__ == '__main__':
     # Load config from config.json
     script_dir = Path(__file__).resolve().parent
     config_path = script_dir.parent / 'config.json'
 
+    # Setup argument parser
+    parser = argparse.ArgumentParser(
+        description='Count lines in projects with configurable exclusions',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  count-lines.py                              # Count lines in devRoot
+  count-lines.py C:\\Projects\\myapp           # Count lines in specific path
+  count-lines.py --show-exclusions            # View current exclusions
+  count-lines.py --add-ext .zip               # Add .zip to exclusions
+  count-lines.py --add-pattern backup         # Add backup paths to exclusions
+  count-lines.py --manage                     # Interactive management
+        '''
+    )
+
+    parser.add_argument('path', nargs='?', help='Path to analyze (default: devRoot from config.json)')
+    parser.add_argument('--show-exclusions', action='store_true', help='Display current exclusion configuration')
+    parser.add_argument('--manage', action='store_true', help='Launch interactive exclusion manager')
+    parser.add_argument('--add-ext', metavar='EXT', action='append', help='Add global extension exclusion (e.g., .zip)')
+    parser.add_argument('--add-pattern', metavar='PAT', action='append', help='Add global path pattern exclusion (e.g., backup)')
+    parser.add_argument('--remove-ext', metavar='EXT', action='append', help='Remove global extension exclusion')
+    parser.add_argument('--remove-pattern', metavar='PAT', action='append', help='Remove global path pattern exclusion')
+
+    args = parser.parse_args()
+
+    # Load config
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
         dev_root = Path(config['paths']['devRoot'])
     except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
-        print(f"Error: Could not read devRoot from config.json: {e}")
+        print(f"Error: Could not read config.json: {e}")
         print(f"Expected config at: {config_path}")
         sys.exit(1)
 
-    # Load exclusion configuration
+    # Handle management commands
+    if args.show_exclusions:
+        show_exclusions(config)
+        sys.exit(0)
+
+    if args.manage:
+        interactive_manage(config_path)
+        sys.exit(0)
+
+    # Handle add/remove operations
+    modified = False
+
+    if args.add_ext:
+        for ext in args.add_ext:
+            if add_global_extension(config_path, ext):
+                modified = True
+
+    if args.add_pattern:
+        for pattern in args.add_pattern:
+            if add_global_pattern(config_path, pattern):
+                modified = True
+
+    if args.remove_ext:
+        for ext in args.remove_ext:
+            if remove_global_extension(config_path, ext):
+                modified = True
+
+    if args.remove_pattern:
+        for pattern in args.remove_pattern:
+            if remove_global_pattern(config_path, pattern):
+                modified = True
+
+    # If any modifications were made, reload config and exit
+    if modified:
+        print("\nExclusions updated successfully!")
+        sys.exit(0)
+
+    # Load exclusion configuration for counting
     exclusion_config = load_exclusion_config(config_path)
 
-    # Parse command line arguments
-    if len(sys.argv) > 1:
+    # Determine path to analyze
+    if args.path:
         # User specified a path
-        target = sys.argv[1]
+        target = args.path
 
         # Convert to absolute path
         if os.path.isabs(target):
@@ -307,4 +630,5 @@ if __name__ == '__main__':
         # Default to devRoot from config.json
         base_path = dev_root
 
+    # Run line counting
     count_project_lines(base_path, dev_root, exclusion_config)

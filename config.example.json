@@ -198,8 +198,8 @@
   },
   "lineCounter": {
     "globalExclusions": {
-      "extensions": [".log", ".vsix", ".vhdx", ".avhdx"],
-      "pathPatterns": ["log"]
+      "extensions": [".log", ".vsix", ".vhdx", ".avhdx", ".zip", ".csv", ".conf"],
+      "pathPatterns": ["log", "backup"]
     },
     "projectExclusions": {
       "my-project": {
@@ -230,5 +230,5 @@
       "excludeAll": "Exclude entire project from counts"
     }
   },
-  "configVersion": "config.10"
+  "configVersion": "config.11"
 }

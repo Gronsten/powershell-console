@@ -20,6 +20,34 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.13.3 (2025-12-04)
+
+**Config Changes Required:**
+- Added `.zip`, `.csv`, `.conf` to `lineCounter.globalExclusions.extensions`
+- Added `backup` to `lineCounter.globalExclusions.pathPatterns`
+- Config version: `config.10` → `config.11`
+
+**New Features:**
+- **Interactive Exclusion Management for count-lines** - Manage exclusions without editing JSON
+  - `--show-exclusions` - Display current global and project-specific exclusions
+  - `--manage` - Interactive menu for managing exclusions
+  - `--add-ext .ext` - Add global extension exclusion via CLI
+  - `--add-pattern pattern` - Add global path pattern exclusion via CLI
+  - `--remove-ext .ext` - Remove global extension exclusion via CLI
+  - `--remove-pattern pattern` - Remove global path pattern exclusion via CLI
+  - Multiple operations in single command: `count-lines.py --add-ext .zip --add-pattern backup`
+  - Validation and normalization of extensions (auto-adds dot prefix)
+  - Sorted output for consistent display
+
+**Bug Fixes:**
+- **Fixed count-lines Missing File Types** - Restored ignored file types that were lost
+  - Added `.zip` files to global exclusions (archive files)
+  - Added `.csv` files to global exclusions (data files)
+  - Added `.conf` files to global exclusions (configuration files)
+  - Added `backup` path pattern to global exclusions (backup directories)
+  - Note: `.vhdx`, `.avhdx`, and `.vsix` were already present
+  - These files are now excluded from line counts across all projects by default
+
 ### v1.13.2 (2025-12-03)
 
 **Code Cleanup: Remove Dead Code & Simplify Package Manager Cleanup**
