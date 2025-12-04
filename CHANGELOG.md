@@ -27,6 +27,19 @@ All notable changes to this project have been documented during development.
 - Added `backup` to `lineCounter.globalExclusions.pathPatterns`
 - Config version: `config.10` → `config.11`
 
+**New Features:**
+- **Interactive Exclusion Management for count-lines** - Manage exclusions without editing JSON
+  - `--show-exclusions` - Display current global and project-specific exclusions
+  - `--manage` - Interactive menu for managing exclusions
+  - `--add-ext .ext` - Add global extension exclusion via CLI
+  - `--add-pattern pattern` - Add global path pattern exclusion via CLI
+  - `--remove-ext .ext` - Remove global extension exclusion via CLI
+  - `--remove-pattern pattern` - Remove global path pattern exclusion via CLI
+  - Multiple operations in single command: `count-lines.py --add-ext .zip --add-pattern backup`
+  - Automatic config backup before modifications (timestamped)
+  - Validation and normalization of extensions (auto-adds dot prefix)
+  - Sorted output for consistent display
+
 **Bug Fixes:**
 - **Fixed count-lines Missing File Types** - Restored ignored file types that were lost
   - Added `.zip` files to global exclusions (archive files)
