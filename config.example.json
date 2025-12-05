@@ -198,8 +198,20 @@
   },
   "lineCounter": {
     "globalExclusions": {
-      "extensions": [".log", ".vsix", ".vhdx", ".avhdx", ".zip", ".csv", ".conf"],
-      "pathPatterns": ["log", "backup"]
+      "extensions": [
+        ".avhdx",
+        ".conf",
+        ".csv",
+        ".log",
+        ".vhdx",
+        ".vsix",
+        ".zip"
+      ],
+      "pathPatterns": [
+        "backup",
+        "log",
+        "npm-packages.json"
+      ]
     },
     "projectExclusions": {
       "my-project": {
