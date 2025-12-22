@@ -99,6 +99,90 @@ $config = Get-Content $configPath -Raw | ConvertFrom-Json
 $source = $config.paths.backupSource
 $destination = Join-Path $env:USERPROFILE $config.paths.backupDestination
 
+# Function to build exclusion flags from config
+function Get-ExclusionFlags {
+    param($BackupConfig)
+
+    $excludeFlags = ""
+
+    # Check if backupDev section exists (backward compatibility)
+    if (-not $BackupConfig.PSObject.Properties.Name -contains "backupDev") {
+        Write-Host "Warning: No 'backupDev' section in config.json - using defaults only (/XJ)" -ForegroundColor Yellow
+        return ""
+    }
+
+    $backupDev = $BackupConfig.backupDev
+
+    # Build directory exclusions
+    $allExcludeDirs = @()
+
+    if ($backupDev.PSObject.Properties.Name -contains "excludeDirectories" -and $backupDev.excludeDirectories) {
+        $allExcludeDirs += $backupDev.excludeDirectories
+    }
+
+    if ($backupDev.PSObject.Properties.Name -contains "customExclusions" -and
+        $backupDev.customExclusions.PSObject.Properties.Name -contains "directories" -and
+        $backupDev.customExclusions.directories) {
+        $allExcludeDirs += $backupDev.customExclusions.directories
+    }
+
+    if ($allExcludeDirs.Count -gt 0) {
+        $excludeFlags += " /XD"
+        foreach ($dir in $allExcludeDirs) {
+            # Quote directories with spaces
+            if ($dir -match '\s') {
+                $excludeFlags += " `"$dir`""
+            } else {
+                $excludeFlags += " $dir"
+            }
+        }
+    }
+
+    # Build file exclusions
+    $allExcludeFiles = @()
+
+    if ($backupDev.PSObject.Properties.Name -contains "excludeFiles" -and $backupDev.excludeFiles) {
+        $allExcludeFiles += $backupDev.excludeFiles
+    }
+
+    if ($backupDev.PSObject.Properties.Name -contains "customExclusions" -and
+        $backupDev.customExclusions.PSObject.Properties.Name -contains "files" -and
+        $backupDev.customExclusions.files) {
+        $allExcludeFiles += $backupDev.customExclusions.files
+    }
+
+    if ($allExcludeFiles.Count -gt 0) {
+        $excludeFlags += " /XF"
+        foreach ($file in $allExcludeFiles) {
+            # Quote files with spaces
+            if ($file -match '\s') {
+                $excludeFlags += " `"$file`""
+            } else {
+                $excludeFlags += " $file"
+            }
+        }
+    }
+
+    return $excludeFlags
+}
+
+# Get exclusion flags from config
+$exclusionFlags = Get-ExclusionFlags -BackupConfig $config
+
+# Determine mirror mode (default to false for safety)
+$useMirrorMode = $false
+if ($config.PSObject.Properties.Name -contains "backupDev" -and
+    $config.backupDev.PSObject.Properties.Name -contains "mirrorMode") {
+    $useMirrorMode = $config.backupDev.mirrorMode
+}
+
+# Display exclusion info
+if ($exclusionFlags) {
+    Write-Host "Exclusions configured from config.json" -ForegroundColor Cyan
+} else {
+    Write-Host "No custom exclusions configured (only /XJ junction points excluded)" -ForegroundColor Yellow
+}
+
 # Define log files (in module directory)
 $detailedLog = Join-Path $scriptDir "backup-dev.log"
 $summaryLog = Join-Path $scriptDir "backup-history.log"
@@ -124,6 +208,14 @@ if ($countOnly) {
         Write-Host "  TEST MODE - Limited to $testModeLimit operations" -ForegroundColor Yellow
     }
     Write-Host "  Backup Started: $timestamp" -ForegroundColor Cyan
+
+    # Display backup mode warning
+    if ($useMirrorMode) {
+        Write-Host "  Mode: MIRROR (/MIR) - DELETES files not in source" -ForegroundColor Red
+        Write-Host "  WARNING: Destination will be an exact mirror of source!" -ForegroundColor Red
+    } else {
+        Write-Host "  Mode: COPY (/E) - Keeps old files (safer)" -ForegroundColor Green
+    }
 }
 Write-Separator
 Write-Host ""
@@ -193,13 +285,14 @@ $countLog = Join-Path $scriptDir "temp_count_log.txt"
 
 # Run robocopy in list-only mode to count files
 # For count-only mode, use /E instead of /MIR to only count source files (not deletes)
-# For backup operations, /MIR will be used in Pass 2
-$robocopyMode = if ($countOnly) { "/E" } else { "/MIR" }
+# For backup operations, use config setting (default /E for safety)
+$robocopyMode = if ($countOnly) { "/E" } elseif ($useMirrorMode) { "/MIR" } else { "/E" }
 
 $countJob = Start-Job -ScriptBlock {
-    param($src, $dst, $log, $mode)
-    robocopy $src $dst /L $mode /R:0 /W:0 /LOG:$log /NP /NDL /XJ 2>&1
-} -ArgumentList $source, $destination, $countLog, $robocopyMode
+    param($src, $dst, $log, $mode, $exclusions)
+    $cmd = "robocopy `"$src`" `"$dst`" /L $mode /R:0 /W:0 /LOG:`"$log`" /NP /NDL /XJ$exclusions 2>&1"
+    Invoke-Expression $cmd
+} -ArgumentList $source, $destination, $countLog, $robocopyMode, $exclusionFlags
 
 $countStartTime = Get-Date
 $countLimitReached = $false
@@ -335,16 +428,17 @@ Write-Host "Pass 2: Starting backup with progress tracking..." -ForegroundColor 
 
 # Start robocopy process in background
 $robocopyJob = Start-Job -ScriptBlock {
-    param($src, $dst, $log, $testMode)
+    param($src, $dst, $log, $testMode, $mode, $exclusions)
 
     # Build robocopy command with appropriate flags
     # /XJ excludes junction points (important for Scoop directories)
-    $robocopyFlags = "/MIR /R:3 /W:5 /LOG+:$log /NP /NDL /ETA /XJ"
+    # Mode is either /MIR (mirror with deletions) or /E (copy without deletions)
+    $robocopyFlags = "$mode /R:3 /W:5 /LOG+:`"$log`" /NP /NDL /ETA /XJ$exclusions"
 
     # Execute robocopy with the constructed flags
     $cmd = "robocopy `"$src`" `"$dst`" $robocopyFlags 2>&1"
     Invoke-Expression $cmd
-} -ArgumentList $source, $destination, $detailedLog, $testMode
+} -ArgumentList $source, $destination, $detailedLog, $testMode, $robocopyMode, $exclusionFlags
 
 $lastProgress = Get-Date
 

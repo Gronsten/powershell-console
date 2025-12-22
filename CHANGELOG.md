@@ -20,6 +20,49 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.14.0 (2025-12-21)
+
+**Config Changes Required:**
+- Added `backupDev` section for backup exclusion configuration
+- Config version: `config.11` → `config.12`
+- **Action Required:** Add the `backupDev` section from `config.example.json` to your `config.json`
+
+**New Features:**
+- **backup-dev: Configurable Exclusion System** - Exclude directories and files from backups
+  - `excludeDirectories` - Array of directory names to exclude anywhere in tree (e.g., `node_modules`, `.git`, `bin`, `obj`)
+  - `excludeFiles` - Array of file patterns to exclude with wildcard support (e.g., `*.log`, `*.tmp`, `*.vhdx`)
+  - `customExclusions.directories` - User-defined directory exclusions
+  - `customExclusions.files` - User-defined file exclusions
+  - All exclusions combine (default + custom)
+  - Dramatically reduces backup size and time (50-93% reduction in test scenarios)
+  - Default exclusions include: development artifacts, IDE configs, build outputs, temporary files, VM images
+
+- **backup-dev: Safer Default Backup Mode** - Changed from mirror to copy mode for safety
+  - `mirrorMode` config option (default: `false`)
+  - When `false` (default): Uses `/E` flag - copies files WITHOUT deleting extras (safer)
+  - When `true`: Uses `/MIR` flag - exact mirror WITH deletions (dangerous, use with caution)
+  - Clear warning displayed when mirror mode is enabled
+  - Prevents accidental data loss from incomplete or corrupted source
+
+**Improvements:**
+- **backup-dev: Better Progress Feedback** - Enhanced status messages
+  - Displays configured exclusion status on startup
+  - Shows backup mode (COPY vs MIRROR) with safety warnings
+  - Clear visual indicators for safer copy mode (green) vs dangerous mirror mode (red)
+
+**Documentation:**
+- **backup-dev README.md** - Complete rewrite with accurate information
+  - Removed false claim about .gitignore pattern support
+  - Documented actual exclusion system (robocopy `/XD` and `/XF` flags)
+  - Added comprehensive configuration examples
+  - Added safety notes about mirror mode
+  - Documented how exclusions work (name-based matching, wildcards)
+
+**Backward Compatibility:**
+- No breaking changes - exclusion system gracefully handles configs without `backupDev` section
+- Displays warning and uses junction point exclusions only (`/XJ`) when `backupDev` missing
+- Existing backups continue to work without modification
+
 ### v1.13.3 (2025-12-04)
 
 **Config Changes Required:**

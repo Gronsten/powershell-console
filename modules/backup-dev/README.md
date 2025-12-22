@@ -5,13 +5,14 @@ A PowerShell module for [powershell-console](../../README.md) that provides inte
 ## Features
 
 - **Multiple Backup Modes**
-  - Full backup (complete mirror with deletions)
+  - Full backup (copy mode - safer, keeps old files by default)
+  - Mirror mode (optional - exact mirror with deletions, use with caution)
   - Test mode (preview limited number of operations)
   - Count mode (count files and directories only)
-- **Smart Exclusions** - Respects .gitignore patterns and custom exclusion rules
+- **Configurable Exclusions** - Exclude directories and files via config.json patterns
 - **Progress Tracking** - Real-time progress indicators during operations
-- **Configurable** - Uses config.json for backup source/destination paths
-- **Logging** - Comprehensive logging to backup-dev.log and backup-history.log
+- **Fully Configurable** - All settings managed through config.json
+- **Comprehensive Logging** - Detailed logs in backup-dev.log and rotating history in backup-history.log
 
 ## Requirements
 
@@ -20,16 +21,58 @@ A PowerShell module for [powershell-console](../../README.md) that provides inte
 
 ## Configuration
 
-Edit `config.json` in the powershell-console root directory:
+Edit `config.json` in the powershell-console root directory. The configuration has two main sections:
+
+### Basic Paths
 
 ```json
 {
   "paths": {
     "backupSource": "C:\\AppInstall\\dev",
-    "backupDestination": "D:\\Backups\\dev"
+    "backupDestination": "OneDrive - Company\\DevBackups"
   }
 }
 ```
+
+### Exclusion Configuration
+
+```json
+{
+  "backupDev": {
+    "excludeDirectories": [
+      "node_modules",
+      ".git",
+      "bin",
+      "obj",
+      ".vscode",
+      "_prod"
+    ],
+    "excludeFiles": [
+      "*.log",
+      "*.tmp",
+      "*.bak",
+      "*.vhdx"
+    ],
+    "customExclusions": {
+      "directories": ["my-custom-folder"],
+      "files": ["*.custom"]
+    },
+    "mirrorMode": false
+  }
+}
+```
+
+### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `excludeDirectories` | Array | See [config.example.json](../../config.example.json) | Directory names to exclude anywhere in the tree |
+| `excludeFiles` | Array | See [config.example.json](../../config.example.json) | File patterns to exclude (supports wildcards like `*.log`) |
+| `customExclusions.directories` | Array | `[]` | User-defined directory exclusions |
+| `customExclusions.files` | Array | `[]` | User-defined file exclusions |
+| `mirrorMode` | Boolean | `false` | **WARNING:** When `true`, uses `/MIR` which DELETES files in destination not in source |
+
+**Safety Note:** Mirror mode is disabled by default. The safer `/E` (copy) mode is used instead, which preserves old files in the destination.
 
 ## Usage
 
@@ -79,21 +122,34 @@ You can also call the script directly:
 
 ### Backup Process
 
-1. **Load Configuration** - Reads source and destination paths from config.json
-2. **Apply Exclusions** - Filters out files/directories based on .gitignore patterns
-3. **Execute Robocopy** - Uses robocopy for efficient file mirroring
-4. **Log Results** - Records operations to backup-dev.log and backup-history.log
+1. **Load Configuration** - Reads source/destination paths and exclusion rules from config.json
+2. **Build Exclusion Flags** - Constructs robocopy `/XD` and `/XF` flags from config
+3. **Pass 1: Count Files** - Scans source to determine total files/directories (with exclusions applied)
+4. **Pass 2: Execute Backup** - Uses robocopy with progress tracking
+5. **Log Results** - Records operations to backup-dev.log and backup-history.log (rotating last 7)
 
-### Exclusion Rules
+### Exclusion System
 
-The backup automatically excludes:
-- Git repositories (`.git/`)
-- Node modules (`node_modules/`)
-- Python virtual environments (`venv/`, `.venv/`)
-- Build artifacts (`dist/`, `build/`)
-- IDE files (`.vscode/`, `.idea/`)
-- System files (`.DS_Store`, `Thumbs.db`)
-- And more (see backup-dev.ps1 for complete list)
+The backup uses robocopy's `/XD` (exclude directories) and `/XF` (exclude files) flags:
+
+**Default Directory Exclusions** (from config.example.json):
+- `node_modules`, `.git`, `bin`, `obj` - Development artifacts
+- `.vscode`, `.idea`, `.vs` - IDE configuration
+- `_prod`, `dist`, `build`, `.next` - Build outputs
+- `__pycache__`, `.pytest_cache`, `coverage` - Python/test artifacts
+- `.terraform`, `.gradle`, `target`, `vendor` - Language-specific
+
+**Default File Exclusions** (from config.example.json):
+- `*.log`, `*.tmp`, `*.bak` - Temporary files
+- `*.vhdx`, `*.iso`, `*.vmdk` - Virtual machine images
+- `*.pyc`, `*.class`, `*.jar` - Compiled artifacts
+- `.DS_Store`, `Thumbs.db`, `desktop.ini` - System files
+
+**How Exclusions Work:**
+- Directory exclusions match by **name** anywhere in the tree
+- File exclusions support **wildcards** (`*.ext`)
+- Custom exclusions can be added via `customExclusions` section
+- All exclusions combine (default + custom)
 
 ### Logging
 
