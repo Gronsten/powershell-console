@@ -5,6 +5,7 @@
 # Parameters - Parse GNU-style arguments
 $testMode = $false
 $countOnly = $false
+$dryRun = $false
 $testModeLimit = 100  # Default limit for test mode
 
 # Parse arguments with support for values
@@ -32,20 +33,23 @@ for ($i = 0; $i -lt $args.Count; $i++) {
             }
         }
         "--count" { $countOnly = $true }
+        "--dry-run" { $dryRun = $true }
         "--help" {
             Write-Host "Usage: backup-dev.ps1 [OPTIONS]"
             Write-Host ""
             Write-Host "Options:"
+            Write-Host "  --dry-run         Simulate full backup without copying files (list-only mode)"
             Write-Host "  --test-mode [N]   Quick test: preview limited to N operations"
             Write-Host "                    N must be >= 100 (default: 100 if not specified)"
             Write-Host "  --count           Only count files and directories, then exit"
             Write-Host "  --help            Show this help message"
             Write-Host ""
             Write-Host "Examples:"
+            Write-Host "  backup-dev.ps1 --dry-run         # Simulate full backup (no copying)"
             Write-Host "  backup-dev.ps1 --test-mode       # Test with 100 items"
             Write-Host "  backup-dev.ps1 --test-mode 250   # Test with 250 items"
-            Write-Host "  backup-dev.ps1 --test-mode 1000  # Test with 1000 items"
             Write-Host "  backup-dev.ps1 --count           # Quick count summary"
+            Write-Host "  backup-dev.ps1                   # Full backup (actual copy)"
             Write-Host ""
             Write-Host "Note: --count runs alone and ignores other switches"
             exit 0
@@ -57,15 +61,15 @@ for ($i = 0; $i -lt $args.Count; $i++) {
             Write-Host "Usage: backup-dev.ps1 [OPTIONS]"
             Write-Host ""
             Write-Host "Options:"
+            Write-Host "  --dry-run         Simulate full backup without copying files (list-only mode)"
             Write-Host "  --test-mode [N]   Quick test: preview limited to N operations"
             Write-Host "                    N must be >= 100 (default: 100 if not specified)"
             Write-Host "  --count           Only count files and directories, then exit"
             Write-Host "  --help            Show this help message"
             Write-Host ""
             Write-Host "Examples:"
+            Write-Host "  backup-dev.ps1 --dry-run         # Simulate full backup (no copying)"
             Write-Host "  backup-dev.ps1 --test-mode       # Test with 100 items"
-            Write-Host "  backup-dev.ps1 --test-mode 250   # Test with 250 items"
-            Write-Host "  backup-dev.ps1 --test-mode 1000  # Test with 1000 items"
             Write-Host "  backup-dev.ps1 --count           # Quick count summary"
             Write-Host ""
             exit 1
@@ -113,19 +117,41 @@ function Get-ExclusionFlags {
 
     $backupDev = $BackupConfig.backupDev
 
-    # Build directory exclusions
+    # Support both old and new config structures for backward compatibility
     $allExcludeDirs = @()
+    $allExcludeFiles = @()
 
+    # New unified structure: backupDev.exclusions.directories/files
+    if ($backupDev.PSObject.Properties.Name -contains "exclusions") {
+        if ($backupDev.exclusions.PSObject.Properties.Name -contains "directories" -and $backupDev.exclusions.directories) {
+            $allExcludeDirs += $backupDev.exclusions.directories
+        }
+        if ($backupDev.exclusions.PSObject.Properties.Name -contains "files" -and $backupDev.exclusions.files) {
+            $allExcludeFiles += $backupDev.exclusions.files
+        }
+    }
+
+    # Old structure (backward compatibility): backupDev.excludeDirectories/excludeFiles + customExclusions
     if ($backupDev.PSObject.Properties.Name -contains "excludeDirectories" -and $backupDev.excludeDirectories) {
         $allExcludeDirs += $backupDev.excludeDirectories
     }
-
-    if ($backupDev.PSObject.Properties.Name -contains "customExclusions" -and
-        $backupDev.customExclusions.PSObject.Properties.Name -contains "directories" -and
-        $backupDev.customExclusions.directories) {
-        $allExcludeDirs += $backupDev.customExclusions.directories
+    if ($backupDev.PSObject.Properties.Name -contains "excludeFiles" -and $backupDev.excludeFiles) {
+        $allExcludeFiles += $backupDev.excludeFiles
+    }
+    if ($backupDev.PSObject.Properties.Name -contains "customExclusions") {
+        if ($backupDev.customExclusions.PSObject.Properties.Name -contains "directories" -and $backupDev.customExclusions.directories) {
+            $allExcludeDirs += $backupDev.customExclusions.directories
+        }
+        if ($backupDev.customExclusions.PSObject.Properties.Name -contains "files" -and $backupDev.customExclusions.files) {
+            $allExcludeFiles += $backupDev.customExclusions.files
+        }
     }
 
+    # Remove duplicates
+    $allExcludeDirs = $allExcludeDirs | Select-Object -Unique
+    $allExcludeFiles = $allExcludeFiles | Select-Object -Unique
+
+    # Build directory exclusion flags
     if ($allExcludeDirs.Count -gt 0) {
         $excludeFlags += " /XD"
         foreach ($dir in $allExcludeDirs) {
@@ -138,19 +164,7 @@ function Get-ExclusionFlags {
         }
     }
 
-    # Build file exclusions
-    $allExcludeFiles = @()
-
-    if ($backupDev.PSObject.Properties.Name -contains "excludeFiles" -and $backupDev.excludeFiles) {
-        $allExcludeFiles += $backupDev.excludeFiles
-    }
-
-    if ($backupDev.PSObject.Properties.Name -contains "customExclusions" -and
-        $backupDev.customExclusions.PSObject.Properties.Name -contains "files" -and
-        $backupDev.customExclusions.files) {
-        $allExcludeFiles += $backupDev.customExclusions.files
-    }
-
+    # Build file exclusion flags
     if ($allExcludeFiles.Count -gt 0) {
         $excludeFlags += " /XF"
         foreach ($file in $allExcludeFiles) {
@@ -196,13 +210,23 @@ $scriptStartTime = Get-Date
 
 # Clear previous detailed log and start new one
 # Determine backup mode for log
-$backupMode = if ($countOnly) { "COUNT" } elseif ($testMode) { "TEST" } else { "FULL" }
+$backupMode = if ($countOnly) { "COUNT" } elseif ($dryRun) { "DRY-RUN" } elseif ($testMode) { "TEST" } else { "FULL" }
 Set-Content -Path $detailedLog -Value "=== Backup started: $timestamp | Mode: $backupMode ==="
 
 Write-Host ""
 Write-Separator
 if ($countOnly) {
     Write-Host "  COUNT MODE - Only scanning source files" -ForegroundColor Yellow
+} elseif ($dryRun) {
+    Write-Host "  DRY-RUN MODE - Simulating backup (no files copied)" -ForegroundColor Cyan
+    Write-Host "  Backup Started: $timestamp" -ForegroundColor Cyan
+
+    # Display what mode would be used
+    if ($useMirrorMode) {
+        Write-Host "  Would use: MIRROR (/MIR) - Would DELETE files not in source" -ForegroundColor Yellow
+    } else {
+        Write-Host "  Would use: COPY (/E) - Would keep old files (safer)" -ForegroundColor Green
+    }
 } else {
     if ($testMode) {
         Write-Host "  TEST MODE - Limited to $testModeLimit operations" -ForegroundColor Yellow
@@ -277,6 +301,8 @@ function Show-Progress {
 # PASS 1: Count total files and directories
 if ($testMode) {
     Write-Host "Pass 1: Quick scan (limited to $testModeLimit items for test mode)..." -ForegroundColor Cyan
+} elseif ($dryRun) {
+    Write-Host "Pass 1: Scanning source directory to count files (dry-run)..." -ForegroundColor Cyan
 } else {
     Write-Host "Pass 1: Scanning source directory to count files..." -ForegroundColor Cyan
 }
@@ -290,7 +316,7 @@ $robocopyMode = if ($countOnly) { "/E" } elseif ($useMirrorMode) { "/MIR" } else
 
 $countJob = Start-Job -ScriptBlock {
     param($src, $dst, $log, $mode, $exclusions)
-    $cmd = "robocopy `"$src`" `"$dst`" /L $mode /R:0 /W:0 /LOG:`"$log`" /NP /NDL /XJ$exclusions 2>&1"
+    $cmd = "robocopy `"$src`" `"$dst`" /L $mode /R:0 /W:0 /LOG:`"$log`" /NP /NDL /XJ $exclusions 2>&1"
     Invoke-Expression $cmd
 } -ArgumentList $source, $destination, $countLog, $robocopyMode, $exclusionFlags
 
@@ -424,21 +450,27 @@ if ($countOnly) {
 }
 
 Write-Host ""
-Write-Host "Pass 2: Starting backup with progress tracking..." -ForegroundColor Cyan
+if ($dryRun) {
+    Write-Host "Pass 2: Simulating backup with progress tracking (no files will be copied)..." -ForegroundColor Cyan
+} else {
+    Write-Host "Pass 2: Starting backup with progress tracking..." -ForegroundColor Cyan
+}
 
 # Start robocopy process in background
 $robocopyJob = Start-Job -ScriptBlock {
-    param($src, $dst, $log, $testMode, $mode, $exclusions)
+    param($src, $dst, $log, $testMode, $mode, $exclusions, $dryRun)
 
     # Build robocopy command with appropriate flags
     # /XJ excludes junction points (important for Scoop directories)
     # Mode is either /MIR (mirror with deletions) or /E (copy without deletions)
-    $robocopyFlags = "$mode /R:3 /W:5 /LOG+:`"$log`" /NP /NDL /ETA /XJ$exclusions"
+    # /L flag for dry-run (list-only mode - no actual copying)
+    $listOnlyFlag = if ($dryRun) { "/L" } else { "" }
+    $robocopyFlags = "$listOnlyFlag $mode /R:3 /W:5 /LOG+:`"$log`" /NP /NDL /ETA /XJ $exclusions"
 
     # Execute robocopy with the constructed flags
     $cmd = "robocopy `"$src`" `"$dst`" $robocopyFlags 2>&1"
     Invoke-Expression $cmd
-} -ArgumentList $source, $destination, $detailedLog, $testMode, $robocopyMode, $exclusionFlags
+} -ArgumentList $source, $destination, $detailedLog, $testMode, $robocopyMode, $exclusionFlags, $dryRun
 
 $lastProgress = Get-Date
 
@@ -519,7 +551,12 @@ Write-Host ""
 if ($testMode) {
     Write-Host "Test mode limit reached ($testModeLimit operations). Stopping backup..." -ForegroundColor Yellow
 }
-Write-Host "Backup complete!" -ForegroundColor Green
+if ($dryRun) {
+    Write-Host "Dry-run complete! No files were actually copied." -ForegroundColor Cyan
+    Write-Host "This was a simulation of what would happen during a real backup." -ForegroundColor Cyan
+} else {
+    Write-Host "Backup complete!" -ForegroundColor Green
+}
 Write-Host ""
 
 $endTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -528,27 +565,45 @@ Add-Content -Path $detailedLog -Value "`n=== Backup completed: $endTime ==="
 # Extract summary from detailed log and append to history
 $detailedContent = Get-Content $detailedLog -Raw
 
-# Extract summary section (Total, Dirs, Files, Bytes, Times, Speed, Ended)
+# Extract only the summary statistics table (not the file listing)
+# Match from the dashed line before "Total" to "Ended :" line
 $summarySection = ""
-if ($detailedContent -match '(?s)([-]+\s*Total.*?Ended\s*:.*?)(\s*===|$)') {
+if ($detailedContent -match '(?s)([-]+\r?\n\s+Total\s+Copied\s+Skipped.*?Ended\s*:.*?)(\r?\n|$)') {
     $summarySection = $matches[1].Trim()
 }
 
-# Append to summary history
-Add-Content -Path $summaryLog -Value "`n=== Backup: $timestamp ==="
+# Prepend to summary history (newest at top, include mode in header)
+# Build new entry
+$newEntry = "=== Backup: $timestamp | Mode: $backupMode ===`n"
 if ($summarySection) {
-    Add-Content -Path $summaryLog -Value $summarySection
+    $newEntry += "$summarySection`n"
 }
-Add-Content -Path $summaryLog -Value "=== Backup completed: $endTime ==="
+$newEntry += "=== Backup completed: $endTime ==="
 
-# Rotate summary log: keep only last 7 backups
+# Read existing content
+$existingContent = ""
+if (Test-Path $summaryLog) {
+    $existingContent = Get-Content $summaryLog -Raw
+}
+
+# Prepend new entry to existing content
+if ($existingContent) {
+    $updatedContent = $newEntry + "`n`n" + $existingContent
+} else {
+    $updatedContent = $newEntry
+}
+
+# Write updated content
+Set-Content -Path $summaryLog -Value $updatedContent
+
+# Rotate summary log: keep only last 10 backups (newest first)
 $summaryContent = Get-Content $summaryLog -Raw
 $backupSessions = $summaryContent -split '(?m)^=== Backup: ' | Where-Object { $_.Trim() -ne "" }
 
 $logRotated = $false
-if ($backupSessions.Count -gt 7) {
-    # Keep only the last 7 sessions
-    $recentSessions = $backupSessions | Select-Object -Last 7
+if ($backupSessions.Count -gt 10) {
+    # Keep only the first 10 sessions (newest are at the top)
+    $recentSessions = $backupSessions | Select-Object -First 10
     $rotatedContent = ($recentSessions | ForEach-Object { "=== Backup: $_" }) -join "`n"
     Set-Content -Path $summaryLog -Value $rotatedContent
     $logRotated = $true
@@ -557,7 +612,7 @@ if ($backupSessions.Count -gt 7) {
 Write-Host "  Detailed log: $detailedLog" -ForegroundColor Cyan
 Write-Host "  Summary history: $summaryLog" -ForegroundColor Cyan
 if ($logRotated) {
-    Write-Host "    (Rotated summary log to keep last 7 backups)" -ForegroundColor Cyan
+    Write-Host "    (Rotated summary log to keep last 10 backups)" -ForegroundColor Cyan
 }
 
 # Display total runtime

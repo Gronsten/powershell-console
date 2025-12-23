@@ -516,7 +516,8 @@ def interactive_manage(config_path: Path):
 if __name__ == '__main__':
     # Load config from config.json
     script_dir = Path(__file__).resolve().parent
-    config_path = script_dir.parent / 'config.json'
+    # Navigate from modules/line-counter/ -> modules/ -> root/
+    config_path = script_dir.parent.parent / 'config.json'
 
     # Setup argument parser
     parser = argparse.ArgumentParser(
@@ -534,6 +535,7 @@ Examples:
     )
 
     parser.add_argument('path', nargs='?', help='Path to analyze (default: devRoot from config.json)')
+    parser.add_argument('--config', help='Path to config.json (default: auto-detect from script location)')
     parser.add_argument('--show-exclusions', action='store_true', help='Display current exclusion configuration')
     parser.add_argument('--manage', action='store_true', help='Launch interactive exclusion manager')
     parser.add_argument('--add-ext', metavar='EXT', action='append', help='Add global extension exclusion (e.g., .zip)')
@@ -542,6 +544,11 @@ Examples:
     parser.add_argument('--remove-pattern', metavar='PAT', action='append', help='Remove global path pattern exclusion')
 
     args = parser.parse_args()
+
+    # Use provided config path or auto-detect
+    if args.config:
+        config_path = Path(args.config)
+    # else: config_path already set above (line 520)
 
     # Load config
     try:

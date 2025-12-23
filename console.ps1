@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.13.3"
+$script:ConsoleVersion = "1.14.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -407,6 +407,18 @@ function Get-AwsAccountCustomName {
 }
 
 $script:Config = Import-Configuration
+
+# Dot-source backup exclusion management functions
+$backupExclusionsPath = Join-Path $PSScriptRoot "modules\backup-dev\backup-exclusions.ps1"
+if (Test-Path $backupExclusionsPath) {
+    . $backupExclusionsPath
+}
+
+# Dot-source line counter exclusion management functions
+$lineCounterExclusionsPath = Join-Path $PSScriptRoot "modules\line-counter\line-counter-exclusions.ps1"
+if (Test-Path $lineCounterExclusionsPath) {
+    . $lineCounterExclusionsPath
+}
 
 # Global variables for connection state
 $global:awsInstance = ""
@@ -1078,20 +1090,22 @@ function Show-CheckboxSelection {
     $drawUI = {
         Clear-Host
 
-        # Draw header
-        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║  $($Title.PadRight(42)) ║" -ForegroundColor Cyan
-        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+        # Draw header (skip if title is blank/whitespace - caller is providing their own header)
+        if (-not [string]::IsNullOrWhiteSpace($Title)) {
+            Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+            Write-Host "║ $($Title.PadRight(42)) ║" -ForegroundColor Cyan
+            Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
 
-        Write-Host $Instructions -ForegroundColor Gray
+            Write-Host $Instructions -ForegroundColor Gray
 
-        # Show custom instructions if provided
-        if ($CustomInstructions.Count -gt 0) {
-            foreach ($key in $CustomInstructions.Keys) {
-                Write-Host $CustomInstructions[$key] -ForegroundColor Gray
+            # Show custom instructions if provided
+            if ($CustomInstructions.Count -gt 0) {
+                foreach ($key in $CustomInstructions.Keys) {
+                    Write-Host $CustomInstructions[$key] -ForegroundColor Gray
+                }
+            } else {
+                Write-Host "Press A to select all, N to deselect all, Q to cancel`n" -ForegroundColor Gray
             }
-        } else {
-            Write-Host "Press A to select all, N to deselect all, Q to cancel`n" -ForegroundColor Gray
         }
 
         # Draw items
@@ -1121,20 +1135,22 @@ function Show-CheckboxSelection {
     if ($UseClearHost) {
         & $drawUI
     } else {
-        # Draw header once for cursor positioning mode
-        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║  $($Title.PadRight(42)) ║" -ForegroundColor Cyan
-        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+        # Draw header once for cursor positioning mode (skip if title is blank/whitespace)
+        if (-not [string]::IsNullOrWhiteSpace($Title)) {
+            Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+            Write-Host "║ $($Title.PadRight(42)) ║" -ForegroundColor Cyan
+            Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
 
-        Write-Host $Instructions -ForegroundColor Gray
+            Write-Host $Instructions -ForegroundColor Gray
 
-        # Show custom instructions if provided
-        if ($CustomInstructions.Count -gt 0) {
-            foreach ($key in $CustomInstructions.Keys) {
-                Write-Host $CustomInstructions[$key] -ForegroundColor Gray
+            # Show custom instructions if provided
+            if ($CustomInstructions.Count -gt 0) {
+                foreach ($key in $CustomInstructions.Keys) {
+                    Write-Host $CustomInstructions[$key] -ForegroundColor Gray
+                }
+            } else {
+                Write-Host "Press A to select all, N to deselect all, Q to cancel`n" -ForegroundColor Gray
             }
-        } else {
-            Write-Host "Press A to select all, N to deselect all, Q to cancel`n" -ForegroundColor Gray
         }
 
         $startLine = [Console]::CursorTop
@@ -3555,7 +3571,8 @@ function Start-MerakiBackup {
 
 function Start-CodeCount {
     # Use $PSScriptRoot to get the actual script directory
-    $countScriptPath = Join-Path $PSScriptRoot "scripts\count-lines.py"
+    $countScriptPath = Join-Path $PSScriptRoot "modules\line-counter\count-lines.py"
+    $configPath = Join-Path $PSScriptRoot "config.json"
 
     # Check if Python is available
     $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
@@ -3789,9 +3806,9 @@ function Start-CodeCount {
     # Count all projects if selected
     if ($countAll) {
         Write-Host "Counting: All Projects" -ForegroundColor Yellow
-        Write-Host "Executing: python $countScriptPath `"$devRoot`"" -ForegroundColor Gray
+        Write-Host "Executing: python $countScriptPath --config `"$configPath`" `"$devRoot`"" -ForegroundColor Gray
         Write-Host ""
-        python $countScriptPath "$devRoot"
+        python $countScriptPath --config "$configPath" "$devRoot"
         Write-Host ""
 
         # If there are also individual items selected, pause before showing them
@@ -3813,9 +3830,9 @@ function Start-CodeCount {
         Write-Host ""
 
         Write-Host "Counting: $relativePath" -ForegroundColor Yellow
-        Write-Host "Executing: python $countScriptPath `"$itemPath`"" -ForegroundColor Gray
+        Write-Host "Executing: python $countScriptPath --config `"$configPath`" `"$itemPath`"" -ForegroundColor Gray
         Write-Host ""
-        python $countScriptPath "$itemPath"
+        python $countScriptPath --config "$configPath" "$itemPath"
         Write-Host ""
 
         # Pause between items (but not after the last one)
@@ -3848,17 +3865,22 @@ function Get-BackupScriptPath {
 
 # Helper function to execute backup with parameters
 function Get-LastBackupTimestamp {
-    # Read from the actual backup-dev.log file
-    $backupLogPath = Join-Path $PSScriptRoot "modules\backup-dev\backup-dev.log"
-    if (Test-Path $backupLogPath) {
+    # Read from backup-history.log which maintains history of last 10 backups (newest first)
+    $backupHistoryPath = Join-Path $PSScriptRoot "modules\backup-dev\backup-history.log"
+    if (Test-Path $backupHistoryPath) {
         try {
-            # Read first line which contains: === Backup started: 2025-12-01 12:40:51 | Mode: FULL ===
-            $firstLine = Get-Content $backupLogPath -First 1
+            # Read the file and find the most recent FULL backup timestamp
+            # Format: === Backup: 2025-12-23 12:44:34 | Mode: FULL ===
+            # Note: File is ordered newest first, so we want the FIRST match
+            $content = Get-Content $backupHistoryPath -Raw
 
-            # Check if this was a FULL backup (not COUNT or TEST)
-            if ($firstLine -match '=== Backup started: (.+?) \| Mode: FULL ===') {
-                $timestampStr = $matches[1]
-                return [DateTime]::Parse($timestampStr)
+            # Find all FULL backup timestamps (newest first in file)
+            $timestamps = [regex]::Matches($content, '=== Backup: (.+?) \| Mode: FULL ===')
+
+            if ($timestamps.Count -gt 0) {
+                # Get the most recent FULL backup timestamp (first match, since newest is at top)
+                $lastTimestamp = $timestamps[0].Groups[1].Value
+                return [DateTime]::Parse($lastTimestamp)
             }
         }
         catch {
@@ -3901,6 +3923,39 @@ function Invoke-BackupScript {
 
     Write-Host ""
     Invoke-StandardPause
+}
+
+function Start-CodeCountBrowser {
+    # Renamed from Start-CodeCount - this is the interactive file browser
+    Start-CodeCount
+}
+
+function Show-CodeCountMenu {
+    # Define code count submenu
+    $defaultMenu = @(
+        (New-MenuAction "Count Lines (Browser)" {
+            Start-CodeCountBrowser
+        }),
+        (New-MenuAction "Manage Exclusions" {
+            Edit-LineCounterExclusions
+        })
+    )
+
+    # Load menu from config (or use default if not customized)
+    $codeCountMenuItems = Get-MenuFromConfig -MenuTitle "Code Count" -DefaultMenuItems $defaultMenu
+
+    do {
+        $choice = Show-ArrowMenu -MenuItems $codeCountMenuItems -Title "Code Count"
+
+        if ($choice -eq -1) {
+            Write-Host "Returning to Main Menu..." -ForegroundColor Cyan
+            return
+        }
+
+        # Execute the selected action
+        $selectedAction = $codeCountMenuItems[$choice]
+        & $selectedAction.Action
+    } while ($true)
 }
 
 
@@ -3959,6 +4014,9 @@ function Start-BackupDevEnvironment {
 function Show-BackupDevMenu {
     # Define backup submenu
     $defaultMenu = @(
+        (New-MenuAction "Dry Run (Simulate Backup)" {
+            Start-BackupDryRun
+        }),
         (New-MenuAction "Count Mode (Quantify Source)" {
             Start-BackupCountMode
         }),
@@ -3967,6 +4025,9 @@ function Show-BackupDevMenu {
         }),
         (New-MenuAction "Full Backup" {
             Start-BackupDevEnvironment
+        }),
+        (New-MenuAction "Manage Exclusions" {
+            Edit-BackupExclusions
         })
     )
 
@@ -4043,7 +4104,7 @@ function Show-MainMenu {
             Start-MerakiBackup
         }),
         (New-MenuAction "Code Count" {
-            Start-CodeCount
+            Show-CodeCountMenu
         }),
         (New-MenuAction "Backup Dev Environment" {
             Show-BackupDevMenu

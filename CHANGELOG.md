@@ -20,14 +20,30 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
-### v1.14.0 (2025-12-21)
+### v1.14.0 (2025-12-23)
 
 **Config Changes Required:**
-- Added `backupDev` section for backup exclusion configuration
+- Added `backupDev.exclusions` section for interactive exclusion management
+- Migrated to unified exclusion structure: `backupDev.exclusions.{directories,files}`
 - Config version: `config.11` → `config.12`
 - **Action Required:** Add the `backupDev` section from `config.example.json` to your `config.json`
 
 **New Features:**
+- **backup-dev: Interactive Exclusion Management** - Manage exclusions without editing JSON
+  - New menu item: "Manage Exclusions" in Backup Dev menu
+  - Checkbox interface for viewing/removing exclusions
+  - Add new exclusions with `+` key
+  - Comma-separated bulk input support (add multiple patterns at once)
+  - Real-time validation and duplicate detection
+  - Auto-migrates old exclusion structure to new unified format
+  - File: `modules/backup-dev/backup-exclusions.ps1`
+
+- **line-counter: Interactive Exclusion Management** - Parallel implementation for code counting
+  - New menu item: "Manage Exclusions" in Code Count menu
+  - Same checkbox interface as backup-dev
+  - Manage extensions and path patterns interactively
+  - Comma-separated bulk input support
+  - File: `modules/line-counter/line-counter-exclusions.ps1`
 - **backup-dev: Configurable Exclusion System** - Exclude directories and files from backups
   - `excludeDirectories` - Array of directory names to exclude anywhere in tree (e.g., `node_modules`, `.git`, `bin`, `obj`)
   - `excludeFiles` - Array of file patterns to exclude with wildcard support (e.g., `*.log`, `*.tmp`, `*.vhdx`)
@@ -44,11 +60,48 @@ All notable changes to this project have been documented during development.
   - Clear warning displayed when mirror mode is enabled
   - Prevents accidental data loss from incomplete or corrupted source
 
+- **backup-dev: Dry-Run Mode** - Safe testing without copying files
+  - New `--dry-run` flag simulates full backup without copying (uses robocopy `/L` flag)
+  - Shows complete progress tracking and statistics
+  - Perfect for testing exclusions and backup behavior in DEV before running in PROD
+  - Clearly indicates simulation mode with cyan-colored messages
+  - Logs show "DRY-RUN" mode and `/L` flag in robocopy options
+
 **Improvements:**
+- **backup-history.log: Compact Summary Format** - Stores only statistics, not full file listings
+  - Reduced log size from 16MB to <1KB per backup session
+  - Tracks last 10 backups (increased from 7)
+  - Mode tracking: FULL, DRY-RUN, TEST, COUNT
+  - Inverted order: newest backups at top for easy viewing
+  - Fixed `Get-LastBackupTimestamp` to read from backup-history.log and find last FULL backup only
+
+- **count-lines.py: Relocated to Module Directory** - Better organization
+  - Moved from `scripts/count-lines.py` to `modules/line-counter/count-lines.py`
+  - Script now lives with its related PowerShell module
+  - Added `--config` argument to explicitly specify config.json path
+  - PowerShell passes config path explicitly (no more guessing from script location)
+
 - **backup-dev: Better Progress Feedback** - Enhanced status messages
   - Displays configured exclusion status on startup
   - Shows backup mode (COPY vs MIRROR) with safety warnings
   - Clear visual indicators for safer copy mode (green) vs dangerous mirror mode (red)
+  - "Last full backup" timestamp shown in menu (tracks FULL backups only, ignores TEST/DRY-RUN)
+
+**Bug Fixes:**
+- **Fixed Config Save Bug in Exclusion Management** - Saved to correct location
+  - backup-exclusions.ps1 was creating duplicate config.json in module folder
+  - line-counter-exclusions.ps1 used fragile relative path (`../../config.json`)
+  - Both now use robust Split-Path pattern to find root config.json
+  - Prevents duplicate config.json files in module directories
+
+- **Fixed Robocopy Exclusion Flag Spacing** - Critical syntax error
+  - `/XJ$exclusions` (no space) → `/XJ $exclusions` (with space)
+  - `/XJ` is standalone flag, needs space before exclusion flags
+  - Prevents command syntax errors
+
+**UI/UX Improvements:**
+- Removed unnecessary horizontal separator bars from Code Count and Backup Dev menus
+- Cleaner menu appearance, consistent with rest of application
 
 **Documentation:**
 - **backup-dev README.md** - Complete rewrite with accurate information
@@ -57,6 +110,10 @@ All notable changes to this project have been documented during development.
   - Added comprehensive configuration examples
   - Added safety notes about mirror mode
   - Documented how exclusions work (name-based matching, wildcards)
+
+- **ARCHITECTURE.md** - Updated for count-lines.py relocation
+  - Updated all path references to new location
+  - Documented config path resolution approach
 
 **Backward Compatibility:**
 - No breaking changes - exclusion system gracefully handles configs without `backupDev` section

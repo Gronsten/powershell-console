@@ -257,7 +257,7 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
   },
 
   "lineCounter": {
-    // Code line counter exclusion rules (scripts/count-lines.py)
+    // Code line counter exclusion rules (modules/line-counter/count-lines.py)
     "globalExclusions": {
       "extensions": [".log", ".vsix"],        // File extensions to exclude everywhere
       "pathPatterns": ["log"]                 // Path segments to exclude (case-insensitive)
@@ -590,7 +590,7 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
 ### 8. Development Utilities
 
 **Code Line Counter**: `Start-CodeCount` (line ~3200)
-- Python-based: scripts/count-lines.py
+- Python-based: modules/line-counter/count-lines.py
 - **Configuration-driven exclusions** via config.json `lineCounter` section
 - Features:
   - Global exclusions (apply to all projects)
@@ -775,7 +775,7 @@ aws ssm start-session `
 
 | Function | Purpose | External Script |
 |----------|---------|----------------|
-| `Start-CodeCount` | Count code lines | `python scripts/count-lines.py` |
+| `Start-CodeCount` | Count code lines | `python modules/line-counter/count-lines.py` |
 | `Start-BackupDevEnvironment` | Backup dev directory | `.\modules\backup-dev\backup-dev.ps1` |
 | `Get-LastBackupTimestamp` | Get last FULL backup timestamp | Reads from `modules/backup-dev/backup-dev.log` (v1.12.0) |
 | `Start-MerakiBackup` | Meraki config backup | External Python script |

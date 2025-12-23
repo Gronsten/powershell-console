@@ -92,16 +92,19 @@ The easiest way to use backup-dev is through the console.ps1 menu:
 You can also call the script directly:
 
 ```powershell
-# Count only
+# Dry-run (simulate full backup without copying)
+.\modules\backup-dev\backup-dev.ps1 --dry-run
+
+# Count only (quick statistics)
 .\modules\backup-dev\backup-dev.ps1 --count
 
-# Test mode with default limit (100 items)
+# Test mode with default limit (100 items, DOES copy)
 .\modules\backup-dev\backup-dev.ps1 --test-mode
 
-# Test mode with custom limit (minimum 100)
+# Test mode with custom limit (minimum 100, DOES copy)
 .\modules\backup-dev\backup-dev.ps1 --test-mode 250
 
-# Full backup
+# Full backup (actual copy)
 .\modules\backup-dev\backup-dev.ps1
 
 # Show help
@@ -110,13 +113,19 @@ You can also call the script directly:
 
 ## Command-Line Options
 
-| Option | Description |
-|--------|-------------|
-| `--count` | Only count files and directories, then exit |
-| `--test-mode [N]` | Quick test: preview limited to N operations (N >= 100, default: 100) |
-| `--help` | Show help message |
+| Option | Description | Copies Files? |
+|--------|-------------|---------------|
+| `--dry-run` | Simulate full backup with progress tracking (list-only mode with `/L` flag) | **No** - Safe simulation |
+| `--count` | Quick count of files and directories, then exit | **No** - Statistics only |
+| `--test-mode [N]` | Limited backup: preview first N operations (N >= 100, default: 100) | **Yes** - Copies limited files |
+| `--help` | Show help message | N/A |
+| *(none)* | Full backup with all files | **Yes** - Full copy |
 
-**Note:** The `--count` option runs alone and ignores other switches.
+**Safety Notes:**
+- Use `--dry-run` for safe testing in DEV before running actual backups
+- Use `--count` for quick statistics without any copying
+- Test mode DOES copy files (limited to N operations)
+- The `--count` option runs alone and ignores other switches
 
 ## How It Works
 
