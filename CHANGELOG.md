@@ -605,7 +605,7 @@ Major enhancements to the AWS account sync function with automatic IAM role sess
   - Typically discovers 12h for Admin roles, 4h for devops roles
   - Graceful fallback to 1h if query fails or permissions denied
   - Updates both okta.yaml profiles and config.json sessionDuration
-  - Output shows discovered durations: "Admin in etsnettoolsprod... 12h (43200 seconds)"
+  - Output shows discovered durations: "Admin in exampleaccount... 12h (43200 seconds)"
 
 - **Comprehensive okta.yaml Management** (Enhanced Step 6)
   - Step 6a: Automatically adds missing IDP mappings (account ID → friendly name)
