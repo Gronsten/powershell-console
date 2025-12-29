@@ -20,6 +20,32 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.15.0 (2025-12-29)
+
+**New Features:**
+- **backup-dev: View Backup Logs** - Open logs directly in VS Code
+  - New menu item: "View Detailed Log" - Opens most recent backup log
+  - New menu item: "View Backup History" - Opens summary of last 10 backups
+  - Similar to existing "PowerShell Profile Edit" and "Okta YAML Edit" menu items
+
+- **backup-dev: Deprecated Files Management** - Find and clean old backup files
+  - New menu item: "Show Deprecated Files" - Scan for files in backup but not in source
+  - Preview first 20 deprecated items with counts
+  - Option 1: View full list in VS Code (generates detailed report)
+  - Option 2: Clean deprecated files with confirmation (requires typing "DELETE")
+  - Progress bar during cleanup showing percentage and deleted counts
+  - Useful when using `/E` mode (copy without mirror) to remove accumulated old files
+
+**Bug Fixes:**
+- **Fixed "TRUE" output after backup** - Added explicit `exit 0` at end of backup-dev.ps1
+  - Problem: Script was returning `$logRotated = $true` value to console
+  - Solution: Explicit exit code prevents unintended output
+
+**Documentation:**
+- **Clarified dry run vs count modes** - Both serve distinct purposes
+  - COUNT mode: Quick scan, counts files/dirs, shows what needs copying, exits immediately
+  - DRY RUN mode: Full simulation of backup without copying, detailed progress, slower but comprehensive
+
 ### v1.14.0 (2025-12-23)
 
 **Config Changes Required:**

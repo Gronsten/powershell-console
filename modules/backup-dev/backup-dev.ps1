@@ -621,3 +621,6 @@ $totalRuntime = $scriptEndTime - $scriptStartTime
 $runtimeFormatted = "{0:mm\:ss}" -f $totalRuntime
 Write-Host ""
 Write-Host "  Total runtime: $runtimeFormatted" -ForegroundColor Cyan
+
+# Exit with success code
+exit 0
