@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.14.0"
+$script:ConsoleVersion = "1.15.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -4011,6 +4011,264 @@ function Start-BackupDevEnvironment {
     Invoke-BackupScript -Description "Full backup"
 }
 
+function Show-DeprecatedBackupFiles {
+    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║  BACKUP - DEPRECATED FILES                 ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+
+    Write-Host "This will scan for files in the backup that no longer exist in the source." -ForegroundColor Yellow
+    Write-Host "These are files that were previously backed up but have since been deleted." -ForegroundColor Gray
+    Write-Host ""
+
+    $backupScriptPath = Get-BackupScriptPath
+    if (-not $backupScriptPath) { return }
+
+    # Load configuration
+    $scriptDir = Split-Path -Parent $backupScriptPath
+    $rootDir = Split-Path -Parent (Split-Path -Parent $scriptDir)
+    $configPath = Join-Path $rootDir "config.json"
+
+    if (-not (Test-Path $configPath)) {
+        Write-Host "❌ Config file not found at: $configPath" -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+
+    $config = Get-Content $configPath -Raw | ConvertFrom-Json
+    $source = $config.paths.backupSource
+    $destination = Join-Path $env:USERPROFILE $config.paths.backupDestination
+
+    # Verify paths exist
+    if (-not (Test-Path $source)) {
+        Write-Host "❌ Source path not found: $source" -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+
+    if (-not (Test-Path $destination)) {
+        Write-Host "❌ Backup destination not found: $destination" -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+
+    Write-Host "Scanning for deprecated files..." -ForegroundColor Cyan
+    Write-Host "  Source: $source" -ForegroundColor Gray
+    Write-Host "  Backup: $destination" -ForegroundColor Gray
+    Write-Host ""
+
+    # Run robocopy in list-only mode with /MIR to see what would be deleted
+    $tempLog = Join-Path $env:TEMP "backup-deprecated-scan.txt"
+    $null = robocopy "$source" "$destination" /L /MIR /R:0 /W:0 /LOG:"$tempLog" /NP /NDL /XJ 2>&1
+
+    # Parse log for EXTRA files (files that exist in destination but not source)
+    if (Test-Path $tempLog) {
+        $logContent = Get-Content $tempLog
+        $extraFiles = $logContent | Where-Object { $_ -match '\*EXTRA File' }
+        $extraDirs = $logContent | Where-Object { $_ -match '\*EXTRA Dir' }
+
+        $extraFileCount = $extraFiles.Count
+        $extraDirCount = $extraDirs.Count
+
+        if ($extraFileCount -eq 0 -and $extraDirCount -eq 0) {
+            Write-Host "✅ No deprecated files found! Backup is clean." -ForegroundColor Green
+            Remove-Item $tempLog -Force -ErrorAction SilentlyContinue
+            Invoke-StandardPause
+            return
+        }
+
+        Write-Host "Found deprecated items:" -ForegroundColor Yellow
+        Write-Host "  Files: $extraFileCount" -ForegroundColor White
+        Write-Host "  Directories: $extraDirCount" -ForegroundColor White
+        Write-Host ""
+
+        # Show first 20 items as preview
+        Write-Host "Preview (first 20 items):" -ForegroundColor Cyan
+        $preview = ($extraFiles + $extraDirs) | Select-Object -First 20
+        foreach ($item in $preview) {
+            # Extract just the filename from the robocopy output
+            if ($item -match '\*EXTRA (File|Dir)\s+(.+)$') {
+                $type = $matches[1]
+                $path = $matches[2].Trim()
+                if ($type -eq "File") {
+                    Write-Host "  [F] $path" -ForegroundColor Gray
+                } else {
+                    Write-Host "  [D] $path" -ForegroundColor DarkGray
+                }
+            }
+        }
+
+        if (($extraFileCount + $extraDirCount) -gt 20) {
+            Write-Host "  ... and $(($extraFileCount + $extraDirCount) - 20) more" -ForegroundColor DarkGray
+        }
+
+        Write-Host ""
+        Write-Host "Options:" -ForegroundColor Cyan
+        Write-Host "  1. View full list in VS Code" -ForegroundColor White
+        Write-Host "  2. Clean deprecated files (DELETE them from backup)" -ForegroundColor Red
+        Write-Host "  3. Cancel" -ForegroundColor Gray
+        Write-Host ""
+
+        $choice = Read-Host "Select option (1-3)"
+
+        switch ($choice) {
+            "1" {
+                # Create a readable report
+                $reportPath = Join-Path $env:TEMP "backup-deprecated-files.txt"
+                $report = @()
+                $report += "Deprecated Backup Files Report"
+                $report += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+                $report += "Source: $source"
+                $report += "Backup: $destination"
+                $report += ""
+                $report += "Summary:"
+                $report += "  Files: $extraFileCount"
+                $report += "  Directories: $extraDirCount"
+                $report += ""
+                $report += "=" * 80
+                $report += ""
+
+                if ($extraDirs.Count -gt 0) {
+                    $report += "DIRECTORIES ($extraDirCount):"
+                    $report += "-" * 80
+                    foreach ($item in $extraDirs) {
+                        if ($item -match '\*EXTRA Dir\s+(.+)$') {
+                            $report += "  $($matches[1].Trim())"
+                        }
+                    }
+                    $report += ""
+                }
+
+                if ($extraFiles.Count -gt 0) {
+                    $report += "FILES ($extraFileCount):"
+                    $report += "-" * 80
+                    foreach ($item in $extraFiles) {
+                        if ($item -match '\*EXTRA File\s+(.+)$') {
+                            $report += "  $($matches[1].Trim())"
+                        }
+                    }
+                }
+
+                Set-Content -Path $reportPath -Value $report
+                Invoke-Expression "code '$reportPath'"
+                Write-Host "✅ Report opened in VS Code" -ForegroundColor Green
+            }
+            "2" {
+                Write-Host ""
+                Write-Host "⚠️  WARNING: This will PERMANENTLY DELETE $($extraFileCount + $extraDirCount) items from:" -ForegroundColor Red
+                Write-Host "  $destination" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "This action CANNOT be undone!" -ForegroundColor Red
+                Write-Host ""
+                $confirm = Read-Host "Type 'DELETE' to confirm"
+
+                if ($confirm -eq "DELETE") {
+                    Write-Host ""
+                    Write-Host "Cleaning deprecated files..." -ForegroundColor Yellow
+                    Write-Host ""
+
+                    # Create a temporary log for the cleanup operation
+                    $cleanupLog = Join-Path $env:TEMP "backup-cleanup.txt"
+
+                    # Start robocopy in background with logging
+                    $cleanupJob = Start-Job -ScriptBlock {
+                        param($src, $dst, $log)
+                        $cmd = "robocopy `"$src`" `"$dst`" /MIR /R:3 /W:5 /LOG:`"$log`" /NP /NDL /XJ 2>&1"
+                        Invoke-Expression $cmd
+                    } -ArgumentList $source, $destination, $cleanupLog
+
+                    # Progress tracking
+                    $script:deletedDirs = 0
+                    $script:deletedFiles = 0
+                    $script:lastUpdateTime = Get-Date
+
+                    # Monitor job progress
+                    while ($cleanupJob.State -eq 'Running') {
+                        Start-Sleep -Milliseconds 200
+
+                        if (Test-Path $cleanupLog) {
+                            try {
+                                $logContent = Get-Content $cleanupLog -ErrorAction SilentlyContinue
+
+                                # Count deletions
+                                $extraDirsFound = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
+                                $extraFilesFound = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
+                                $script:deletedDirs = $extraDirsFound
+                                $script:deletedFiles = $extraFilesFound
+
+                                # Update progress every 500ms
+                                $elapsed = (Get-Date) - $script:lastUpdateTime
+                                if ($elapsed.TotalMilliseconds -ge 500) {
+                                    $percentage = [math]::Min([math]::Floor((($script:deletedDirs + $script:deletedFiles) / ($extraDirCount + $extraFileCount)) * 100), 100)
+                                    Write-Host "`rProgress: $percentage% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
+                                    $script:lastUpdateTime = Get-Date
+                                }
+                            }
+                            catch {
+                                # Log might be locked, skip this iteration
+                            }
+                        }
+                    }
+
+                    # Wait for job to complete
+                    $null = Receive-Job $cleanupJob -Wait -AutoRemoveJob
+
+                    # Final count
+                    if (Test-Path $cleanupLog) {
+                        $logContent = Get-Content $cleanupLog -ErrorAction SilentlyContinue
+                        $script:deletedDirs = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
+                        $script:deletedFiles = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
+                        Remove-Item $cleanupLog -Force -ErrorAction SilentlyContinue
+                    }
+
+                    Write-Host "`r                                                                      " -NoNewline
+                    Write-Host "`r✅ Cleanup complete! Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -ForegroundColor Green
+                } else {
+                    Write-Host "Cleanup cancelled." -ForegroundColor Yellow
+                }
+            }
+            default {
+                Write-Host "Operation cancelled." -ForegroundColor Yellow
+            }
+        }
+
+        Remove-Item $tempLog -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "❌ Failed to create scan log" -ForegroundColor Red
+    }
+
+    Invoke-StandardPause
+}
+
+function Open-BackupDetailedLog {
+    $backupScriptPath = Get-BackupScriptPath
+    if (-not $backupScriptPath) { return }
+
+    $scriptDir = Split-Path -Parent $backupScriptPath
+    $detailedLog = Join-Path $scriptDir "backup-dev.log"
+
+    if (Test-Path $detailedLog) {
+        Invoke-Expression "code '$detailedLog'"
+    } else {
+        Write-Host "No detailed log found at: $detailedLog" -ForegroundColor Yellow
+    }
+    Invoke-StandardPause
+}
+
+function Open-BackupHistoryLog {
+    $backupScriptPath = Get-BackupScriptPath
+    if (-not $backupScriptPath) { return }
+
+    $scriptDir = Split-Path -Parent $backupScriptPath
+    $historyLog = Join-Path $scriptDir "backup-history.log"
+
+    if (Test-Path $historyLog) {
+        Invoke-Expression "code '$historyLog'"
+    } else {
+        Write-Host "No history log found at: $historyLog" -ForegroundColor Yellow
+    }
+    Invoke-StandardPause
+}
+
 function Show-BackupDevMenu {
     # Define backup submenu
     $defaultMenu = @(
@@ -4025,6 +4283,15 @@ function Show-BackupDevMenu {
         }),
         (New-MenuAction "Full Backup" {
             Start-BackupDevEnvironment
+        }),
+        (New-MenuAction "View Detailed Log" {
+            Open-BackupDetailedLog
+        }),
+        (New-MenuAction "View Backup History" {
+            Open-BackupHistoryLog
+        }),
+        (New-MenuAction "Show Deprecated Files" {
+            Show-DeprecatedBackupFiles
         }),
         (New-MenuAction "Manage Exclusions" {
             Edit-BackupExclusions
