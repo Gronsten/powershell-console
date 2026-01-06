@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.15.0"
+$script:ConsoleVersion = "1.16.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -753,9 +753,110 @@ function Select-PackagesToUpdate {
         # Get npm installation info to determine if we should manage npm package
         $npmInfo = Get-NpmInstallInfo
 
-        $npmOutdated = npm outdated -g --json 2>&1 | ConvertFrom-Json
+        # Capture npm output (includes both stderr and stdout)
+        $npmRawOutput = npm outdated -g --json 2>&1 | Out-String
+
+        # Extract JSON from output (npm outputs error text, then JSON, then more error text)
+        # Find lines that form valid JSON (between first { and last })
+        $lines = $npmRawOutput -split "`n"
+        $jsonLines = @()
+        $inJson = $false
+        $braceCount = 0
+
+        foreach ($line in $lines) {
+            # Start capturing when we see opening brace
+            if ($line.Trim() -match '^[\{\[]') {
+                $inJson = $true
+            }
+
+            if ($inJson) {
+                $jsonLines += $line
+
+                # Count braces to find where JSON ends
+                $braceCount += ($line.ToCharArray() | Where-Object { $_ -eq '{' -or $_ -eq '[' }).Count
+                $braceCount -= ($line.ToCharArray() | Where-Object { $_ -eq '}' -or $_ -eq ']' }).Count
+
+                # When braces are balanced, JSON object is complete
+                if ($braceCount -eq 0) {
+                    break
+                }
+            }
+        }
+
+        $npmOutdated = $null
+        if ($jsonLines.Count -gt 0) {
+            $jsonString = $jsonLines -join "`n"
+            try {
+                $npmOutdated = $jsonString | ConvertFrom-Json
+            } catch {
+                # JSON parsing failed, likely not valid JSON
+                $npmOutdated = $null
+            }
+        }
+
+        # Check if response contains authentication error (E401)
+        if ($npmOutdated -and $npmOutdated.error -and $npmOutdated.error.code -eq "E401") {
+            Write-Host "  ⚠️  npm authentication required (corporate registry)" -ForegroundColor Yellow
+            $loginResponse = Read-Host "  Would you like to login now? (Y/n)"
+
+            if ($loginResponse -notmatch '^[Nn]') {
+                Write-Host "  Starting npm web authentication..." -ForegroundColor Cyan
+                npm login --auth-type=web
+
+                # Retry the outdated check after login
+                Write-Host "  Retrying npm update check..." -ForegroundColor Gray
+                $npmRawOutput = npm outdated -g --json 2>&1 | Out-String
+
+                # Extract JSON from retry output
+                $lines = $npmRawOutput -split "`n"
+                $jsonLines = @()
+                $inJson = $false
+                $braceCount = 0
+
+                foreach ($line in $lines) {
+                    if ($line.Trim() -match '^[\{\[]') {
+                        $inJson = $true
+                    }
+
+                    if ($inJson) {
+                        $jsonLines += $line
+                        $braceCount += ($line.ToCharArray() | Where-Object { $_ -eq '{' -or $_ -eq '[' }).Count
+                        $braceCount -= ($line.ToCharArray() | Where-Object { $_ -eq '}' -or $_ -eq ']' }).Count
+
+                        if ($braceCount -eq 0) {
+                            break
+                        }
+                    }
+                }
+
+                $npmOutdated = $null
+                if ($jsonLines.Count -gt 0) {
+                    $jsonString = $jsonLines -join "`n"
+                    try {
+                        $npmOutdated = $jsonString | ConvertFrom-Json
+                    } catch {
+                        $npmOutdated = $null
+                    }
+                }
+
+                # Check if retry still has error
+                if ($npmOutdated -and $npmOutdated.error) {
+                    Write-Host "  ⚠️  Still unable to check npm updates" -ForegroundColor Red
+                    $npmOutdated = $null
+                }
+            } else {
+                Write-Host "  Skipping npm update check" -ForegroundColor Gray
+                $npmOutdated = $null
+            }
+        }
+
         if ($npmOutdated) {
             foreach ($pkg in $npmOutdated.PSObject.Properties) {
+                # Skip error property if present
+                if ($pkg.Name -eq "error") {
+                    continue
+                }
+
                 # Skip npm package itself if it's Scoop-managed (let Scoop handle nodejs-lts updates)
                 if ($pkg.Name -eq "npm" -and -not $npmInfo.ShouldManageNpmPackage) {
                     Write-Host "  → Skipping npm (managed by Scoop nodejs-lts)" -ForegroundColor DarkGray
@@ -1342,7 +1443,7 @@ function Show-InlineBatchSelection {
 
     # Draw initial UI
     Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║  $($Title.PadRight(42)) ║" -ForegroundColor Cyan
+    Write-Host "║ $($Title.PadRight(42)) ║" -ForegroundColor Cyan
     Write-Host "╚════════════════════════════════════════════╝" -ForegroundColor Cyan
 
     $moreAvailable = $TotalShown -lt $TotalAvailable
