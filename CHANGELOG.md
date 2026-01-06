@@ -20,6 +20,23 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.16.0 (2026-01-05)
+
+**Bug Fixes:**
+- **npm Authentication Error (E401)** - Handle expired JFrog Artifactory credentials
+  - Robust JSON extraction from mixed npm stderr/stdout output
+  - Detect E401 authentication errors when checking for npm package updates
+  - Prompt user for web-based authentication: "Would you like to login now? (Y/n)"
+  - Execute `npm login --auth-type=web` for browser-based authentication
+  - Retry update check after successful login
+  - Gracefully skip npm checking if user declines login
+  - Fixes issue where corporate registry credentials expire and break package manager menu
+
+- **Batch Selection UI Spacing** - Fix title box alignment
+  - Fixed `Show-InlineBatchSelection` function padding (reduced from 2 spaces to 1 space)
+  - Properly aligns title within 44-character box border (1 + 42 + 1 = 44)
+  - Fixes visual spacing for all batch dialogs (NPM and Winget package search)
+
 ### v1.15.0 (2025-12-29)
 
 **New Features:**
