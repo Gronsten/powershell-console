@@ -4474,34 +4474,47 @@ function Show-DeprecatedBackupFiles {
                     # Create a temporary log for the cleanup operation
                     $cleanupLog = Join-Path $env:TEMP "backup-cleanup.txt"
 
-                    # Start robocopy in background with logging
+                    # Start robocopy in background with verbose logging to track deletions
+                    # /V enables verbose output which logs deletions
+                    # /X reports all EXTRA files (those in destination but not source)
                     $cleanupJob = Start-Job -ScriptBlock {
                         param($src, $dst, $log)
-                        $cmd = "robocopy `"$src`" `"$dst`" /MIR /R:3 /W:5 /LOG:`"$log`" /NP /NDL /XJ 2>&1"
+                        $cmd = "robocopy `"$src`" `"$dst`" /MIR /R:3 /W:5 /LOG:`"$log`" /NP /XJ /V /X 2>&1"
                         Invoke-Expression $cmd
                     } -ArgumentList $source, $destination, $cleanupLog
 
                     $robocopyDeletedDirs = 0
                     $robocopyDeletedFiles = 0
                     $script:lastUpdateTime = Get-Date
+                    $totalExpected = $extraDirCount + $extraFileCount
 
-                    # Monitor job progress
+                    # Monitor job progress by counting log entries
                     while ($cleanupJob.State -eq 'Running') {
-                        Start-Sleep -Milliseconds 200
+                        Start-Sleep -Milliseconds 300
 
                         if (Test-Path $cleanupLog) {
                             try {
-                                $logContent = Get-Content $cleanupLog -ErrorAction SilentlyContinue
+                                # Read log with shared access to avoid locking issues
+                                $logStream = [System.IO.File]::Open($cleanupLog, 'Open', 'Read', 'ReadWrite')
+                                $reader = New-Object System.IO.StreamReader($logStream)
+                                $logContent = $reader.ReadToEnd()
+                                $reader.Close()
+                                $logStream.Close()
 
-                                # Count deletions
-                                $robocopyDeletedDirs = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
-                                $robocopyDeletedFiles = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
+                                # Count EXTRA entries (items being deleted)
+                                # In verbose mode with /X, EXTRA items are marked
+                                $extraMatches = [regex]::Matches($logContent, '\*EXTRA')
+                                $currentDeleted = $extraMatches.Count
 
                                 # Update progress every 500ms
                                 $elapsed = (Get-Date) - $script:lastUpdateTime
                                 if ($elapsed.TotalMilliseconds -ge 500) {
-                                    $percentage = [math]::Min([math]::Floor((($robocopyDeletedDirs + $robocopyDeletedFiles) / ($extraDirCount + $extraFileCount)) * 100), 100)
-                                    Write-Host "`r  Progress: $percentage% | Deleted: $robocopyDeletedDirs dirs, $robocopyDeletedFiles files" -NoNewline -ForegroundColor Yellow
+                                    if ($totalExpected -gt 0) {
+                                        $percentage = [math]::Min([math]::Floor(($currentDeleted / $totalExpected) * 100), 100)
+                                        Write-Host "`r  Progress: $percentage% | Processing: $currentDeleted / $totalExpected items" -NoNewline -ForegroundColor Yellow
+                                    } else {
+                                        Write-Host "`r  Processing: $currentDeleted items..." -NoNewline -ForegroundColor Yellow
+                                    }
                                     $script:lastUpdateTime = Get-Date
                                 }
                             }
@@ -4514,11 +4527,18 @@ function Show-DeprecatedBackupFiles {
                     # Wait for job to complete
                     $null = Receive-Job $cleanupJob -Wait -AutoRemoveJob
 
-                    # Final count from robocopy
+                    # Final count from robocopy log
                     if (Test-Path $cleanupLog) {
-                        $logContent = Get-Content $cleanupLog -ErrorAction SilentlyContinue
-                        $robocopyDeletedDirs = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
-                        $robocopyDeletedFiles = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
+                        try {
+                            $logContent = Get-Content $cleanupLog -Raw -ErrorAction SilentlyContinue
+                            # Count EXTRA Dir and EXTRA File separately
+                            $robocopyDeletedDirs = ([regex]::Matches($logContent, '\*EXTRA Dir')).Count
+                            $robocopyDeletedFiles = ([regex]::Matches($logContent, '\*EXTRA File')).Count
+                        } catch {
+                            # Use expected counts as fallback
+                            $robocopyDeletedDirs = $extraDirCount
+                            $robocopyDeletedFiles = $extraFileCount
+                        }
                         Remove-Item $cleanupLog -Force -ErrorAction SilentlyContinue
                     }
 

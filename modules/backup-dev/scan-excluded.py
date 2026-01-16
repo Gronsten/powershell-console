@@ -86,6 +86,17 @@ def scan_backup(backup_path: str, exclude_dirs: list[str], exclude_files: list[s
     }
 
 
+def remove_readonly(func, path, excinfo):
+    """
+    Error handler for shutil.rmtree to handle read-only files.
+    Git pack files and index files are often read-only.
+    """
+    import stat
+    # Clear the read-only flag and retry
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 def delete_excluded(backup_path: str, directories: list[str], files: list[str]) -> dict:
     """
     Delete matched directories and files from the backup.
@@ -95,6 +106,7 @@ def delete_excluded(backup_path: str, directories: list[str], files: list[str]) 
         - deleted_files: count of successfully deleted files
         - errors: list of error messages
     """
+    import stat
     backup_path = Path(backup_path)
     deleted_dirs = 0
     deleted_files = 0
@@ -105,7 +117,8 @@ def delete_excluded(backup_path: str, directories: list[str], files: list[str]) 
         full_path = backup_path / dir_path
         if full_path.exists() and full_path.is_dir():
             try:
-                shutil.rmtree(full_path)
+                # Use onerror handler to deal with read-only files (common in .git)
+                shutil.rmtree(full_path, onerror=remove_readonly)
                 deleted_dirs += 1
             except Exception as e:
                 errors.append(f"Dir: {dir_path} - {str(e)}")
@@ -115,6 +128,9 @@ def delete_excluded(backup_path: str, directories: list[str], files: list[str]) 
         full_path = backup_path / file_path
         if full_path.exists() and full_path.is_file():
             try:
+                # Handle read-only files
+                if not os.access(full_path, os.W_OK):
+                    os.chmod(full_path, stat.S_IWRITE)
                 full_path.unlink()
                 deleted_files += 1
             except Exception as e:
