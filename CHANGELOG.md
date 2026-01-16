@@ -20,6 +20,32 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.18.0 (2026-01-16)
+
+**Enhancements:**
+- **backup-dev: Enhanced Deprecated Files Detection** - Now detects files matching exclusion patterns
+  - Scans backup for items that match current exclusion rules (newly excluded files)
+  - Previously only detected files deleted from source
+  - Shows both categories separately in summary and report:
+    - "Deleted from source" - Files that no longer exist in source
+    - "Matching exclusion patterns" - Files that exist in source but are now excluded
+  - Cleanup removes both categories with appropriate methods
+  - Useful when exclusion rules are added after files were already backed up
+  - Uses Python script (`scan-excluded.py`) for fast single-pass directory scanning
+  - Cleanup of excluded files uses Python for ~10x faster deletion (vs PowerShell loops)
+
+**Bug Fixes:**
+- **backup-dev: Access Denied errors deleting .git directories** - Handle read-only files
+  - Git pack files and index files are often marked read-only
+  - Python cleanup now clears read-only attribute before deletion
+  - Fixes "WinError 5 Access is denied" errors when cleaning excluded `.git` directories
+
+- **backup-dev: Progress indication during cleanup** - Real-time feedback for both cleanup phases
+  - Python deletion: Shows percentage, deleted counts, and items processed
+  - Robocopy sync: Shows animated spinner, elapsed time, and progress when available
+  - Progress updates every 500ms during both operations
+  - No more "hanging" appearance during long cleanup operations
+
 ### v1.17.0 (2026-01-15)
 
 **New Features:**
