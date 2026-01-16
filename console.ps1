@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.16.0"
+$script:ConsoleVersion = "1.17.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -4031,6 +4031,46 @@ function Start-CodeCountBrowser {
     Start-CodeCount
 }
 
+function Show-EditConfigsMenu {
+    # Define edit configs submenu
+    $defaultMenu = @(
+        (New-MenuAction "PowerShell Profile" {
+            Invoke-Expression "code '$($script:Config.paths.profilePath)'"
+            Invoke-StandardPause
+        }),
+        (New-MenuAction "Okta YAML" {
+            Invoke-Expression "code '$($script:Config.paths.oktaYamlPath)'"
+            Invoke-StandardPause
+        }),
+        (New-MenuAction "VS Code Settings" {
+            # VS Code settings path (Scoop installation)
+            $vscodeSettingsPath = "C:\AppInstall\scoop\persist\vscode\data\user-data\User\settings.json"
+            if (Test-Path $vscodeSettingsPath) {
+                Invoke-Expression "code '$vscodeSettingsPath'"
+            } else {
+                Write-Host "VS Code settings not found at: $vscodeSettingsPath" -ForegroundColor Yellow
+            }
+            Invoke-StandardPause
+        })
+    )
+
+    # Load menu from config (or use default if not customized)
+    $editConfigsMenuItems = Get-MenuFromConfig -MenuTitle "Edit Configs" -DefaultMenuItems $defaultMenu
+
+    do {
+        $choice = Show-ArrowMenu -MenuItems $editConfigsMenuItems -Title "Edit Configs"
+
+        if ($choice -eq -1) {
+            Write-Host "Returning to Main Menu..." -ForegroundColor Cyan
+            return
+        }
+
+        # Execute the selected action
+        $selectedAction = $editConfigsMenuItems[$choice]
+        & $selectedAction.Action
+    } while ($true)
+}
+
 function Show-CodeCountMenu {
     # Define code count submenu
     $defaultMenu = @(
@@ -4456,13 +4496,8 @@ function Show-MainMenu {
         (New-MenuAction "AWS Login" {
             Start-AwsWorkflow
         }),
-        (New-MenuAction "PowerShell Profile Edit" {
-            Invoke-Expression "code '$($script:Config.paths.profilePath)'"
-    Invoke-StandardPause
-        }),
-        (New-MenuAction "Okta YAML Edit" {
-            Invoke-Expression "code '$($script:Config.paths.oktaYamlPath)'"
-    Invoke-StandardPause
+        (New-MenuAction "Edit Configs" {
+            Show-EditConfigsMenu
         }),
         (New-MenuAction "Whitelist Links Folder" {
             Invoke-Expression "icacls '$($script:Config.paths.linksPath)' /t /setintegritylevel m"

@@ -108,12 +108,8 @@
         "action": "\r\n            Start-AwsWorkflow\r\n        "
       },
       {
-        "text": "PowerShell Profile Edit",
-        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.profilePath)'\"\r\n            Invoke-StandardPause\r\n        "
-      },
-      {
-        "text": "Okta YAML Edit",
-        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.oktaYamlPath)'\"\r\n            Invoke-StandardPause\r\n        "
+        "text": "Edit Configs",
+        "action": "\r\n            Show-EditConfigsMenu\r\n        "
       },
       {
         "text": "Whitelist Links Folder",
@@ -178,6 +174,20 @@
       {
         "text": "Get VPN Connections",
         "action": " Get-VpnConnections "
+      }
+    ],
+    "Edit Configs": [
+      {
+        "text": "PowerShell Profile",
+        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.profilePath)'\"\r\n            Invoke-StandardPause\r\n        "
+      },
+      {
+        "text": "Okta YAML",
+        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.oktaYamlPath)'\"\r\n            Invoke-StandardPause\r\n        "
+      },
+      {
+        "text": "VS Code Settings",
+        "action": "\r\n            $vscodeSettingsPath = \"C:\\AppInstall\\scoop\\persist\\vscode\\data\\user-data\\User\\settings.json\"\r\n            if (Test-Path $vscodeSettingsPath) { Invoke-Expression \"code '$vscodeSettingsPath'\" } else { Write-Host 'VS Code settings not found' -ForegroundColor Yellow }\r\n            Invoke-StandardPause\r\n        "
       }
     ]
   },
@@ -300,5 +310,5 @@
       "management": "All exclusions are fully editable via the 'Manage Exclusions' menu option"
     }
   },
-  "configVersion": "config.12"
+  "configVersion": "config.13"
 }

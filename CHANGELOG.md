@@ -20,6 +20,18 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.17.0 (2026-01-15)
+
+**New Features:**
+- **Edit Configs Sub-Menu** - Consolidated configuration file editing
+  - New "Edit Configs" entry in Main Menu replaces individual config edit items
+  - Sub-menu includes:
+    - PowerShell Profile - Opens profile in VS Code
+    - Okta YAML - Opens okta.yaml in VS Code
+    - VS Code Settings - Opens VS Code settings.json in VS Code
+  - Cleaner Main Menu with grouped config editing functionality
+  - Config version: `config.12` → `config.13`
+
 ### v1.16.0 (2026-01-05)
 
 **Bug Fixes:**
