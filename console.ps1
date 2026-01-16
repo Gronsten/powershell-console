@@ -4399,62 +4399,68 @@ function Show-DeprecatedBackupFiles {
                     $scanScript = Join-Path $scriptDir "scan-excluded.py"
                     if (Test-Path $scanScript) {
                         try {
-                            # Run Python in background job to capture stderr progress
-                            $pythonJob = Start-Job -ScriptBlock {
-                                param($script, $dest, $config)
-                                $psi = New-Object System.Diagnostics.ProcessStartInfo
-                                $psi.FileName = "python"
-                                $psi.Arguments = "`"$script`" `"$dest`" `"$config`" --delete"
-                                $psi.UseShellExecute = $false
-                                $psi.RedirectStandardOutput = $true
-                                $psi.RedirectStandardError = $true
-                                $psi.CreateNoWindow = $true
+                            # Use temp files for stdout/stderr to monitor progress
+                            $stdoutFile = Join-Path $env:TEMP "python-delete-stdout.txt"
+                            $stderrFile = Join-Path $env:TEMP "python-delete-stderr.txt"
 
-                                $process = [System.Diagnostics.Process]::Start($psi)
+                            # Start Python process
+                            $psi = New-Object System.Diagnostics.ProcessStartInfo
+                            $psi.FileName = "python"
+                            $psi.Arguments = "`"$scanScript`" `"$destination`" `"$configPath`" --delete"
+                            $psi.UseShellExecute = $false
+                            $psi.RedirectStandardOutput = $true
+                            $psi.RedirectStandardError = $true
+                            $psi.CreateNoWindow = $true
 
-                                # Read stderr for progress updates
-                                while (-not $process.StandardError.EndOfStream) {
+                            $process = [System.Diagnostics.Process]::Start($psi)
+
+                            $totalExpected = $excludedDirsInBackup.Count + $excludedInBackup.Count
+                            $startTime = Get-Date
+                            $spinnerChars = @('|', '/', '-', '\')
+                            $spinnerIndex = 0
+                            $lastProgress = ""
+
+                            # Monitor process with spinner and progress from stderr
+                            while (-not $process.HasExited) {
+                                Start-Sleep -Milliseconds 250
+
+                                $elapsed = (Get-Date) - $startTime
+                                $elapsedStr = "{0:mm\:ss}" -f $elapsed
+                                $spinner = $spinnerChars[$spinnerIndex % 4]
+                                $spinnerIndex++
+
+                                # Try to read stderr for progress (non-blocking peek)
+                                $progressLine = ""
+                                while ($process.StandardError.Peek() -ge 0) {
                                     $line = $process.StandardError.ReadLine()
-                                    if ($line) {
-                                        Write-Output "STDERR:$line"
+                                    if ($line -match '^PROGRESS:(\d+):(\d+):(\d+):(\d+):(\d+)$') {
+                                        $pct = $Matches[1]
+                                        $dirs = $Matches[2]
+                                        $files = $Matches[3]
+                                        $processed = $Matches[4]
+                                        $total = $Matches[5]
+                                        $progressLine = "  $spinner Progress: $pct% | Deleted: $dirs dirs, $files files ($processed / $total) | $elapsedStr"
                                     }
                                 }
 
-                                # Read stdout for JSON result
-                                $stdout = $process.StandardOutput.ReadToEnd()
-                                $process.WaitForExit()
-
-                                Write-Output "STDOUT:$stdout"
-                            } -ArgumentList $scanScript, $destination, $configPath
-
-                            $totalExpected = $excludedDirsInBackup.Count + $excludedInBackup.Count
-                            $lastProgress = ""
-
-                            # Monitor job for progress
-                            while ($pythonJob.State -eq 'Running') {
-                                Start-Sleep -Milliseconds 200
-                                $output = Receive-Job $pythonJob -Keep 2>$null
-                                if ($output) {
-                                    foreach ($line in $output) {
-                                        if ($line -match '^STDERR:PROGRESS:(\d+):(\d+):(\d+):(\d+):(\d+)$') {
-                                            $pct = $Matches[1]
-                                            $dirs = $Matches[2]
-                                            $files = $Matches[3]
-                                            $processed = $Matches[4]
-                                            $total = $Matches[5]
-                                            $progressLine = "  Progress: $pct% | Deleted: $dirs dirs, $files files ($processed / $total)"
-                                            if ($progressLine -ne $lastProgress) {
-                                                Write-Host "`r$progressLine" -NoNewline -ForegroundColor Yellow
-                                                $lastProgress = $progressLine
-                                            }
-                                        }
-                                    }
+                                if ($progressLine) {
+                                    Write-Host "`r$progressLine                    " -NoNewline -ForegroundColor Yellow
+                                    $lastProgress = $progressLine
+                                } elseif (-not $lastProgress) {
+                                    Write-Host "`r  $spinner Working... | Expected: $totalExpected items | Elapsed: $elapsedStr" -NoNewline -ForegroundColor Yellow
+                                } else {
+                                    # Update spinner on existing progress
+                                    $lastProgress = $lastProgress -replace '^\s+.', "  $spinner"
+                                    Write-Host "`r$lastProgress" -NoNewline -ForegroundColor Yellow
                                 }
                             }
 
-                            # Get final output
-                            $finalOutput = Receive-Job $pythonJob -Wait -AutoRemoveJob
-                            $jsonResult = ($finalOutput | Where-Object { $_ -match '^STDOUT:' }) -replace '^STDOUT:', ''
+                            # Read remaining stderr
+                            $null = $process.StandardError.ReadToEnd()
+
+                            # Read stdout for JSON result
+                            $jsonResult = $process.StandardOutput.ReadToEnd()
+                            $process.WaitForExit()
 
                             # Clear progress line
                             Write-Host "`r                                                                              " -NoNewline
@@ -4470,7 +4476,7 @@ function Show-DeprecatedBackupFiles {
                                 }
                             }
                         } catch {
-                            Write-Host "  Warning: Python deletion failed, using fallback method..." -ForegroundColor Yellow
+                            Write-Host "  Warning: Python deletion failed ($_), using fallback method..." -ForegroundColor Yellow
 
                             # Fallback to PowerShell if Python fails
                             $totalItems = $excludedDirsInBackup.Count + $excludedInBackup.Count
