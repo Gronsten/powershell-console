@@ -20,6 +20,20 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.18.0 (2026-01-15)
+
+**Enhancements:**
+- **backup-dev: Enhanced Deprecated Files Detection** - Now detects files matching exclusion patterns
+  - Scans backup for items that match current exclusion rules (newly excluded files)
+  - Previously only detected files deleted from source
+  - Shows both categories separately in summary and report:
+    - "Deleted from source" - Files that no longer exist in source
+    - "Matching exclusion patterns" - Files that exist in source but are now excluded
+  - Cleanup removes both categories with appropriate methods
+  - Useful when exclusion rules are added after files were already backed up
+  - Uses Python script (`scan-excluded.py`) for fast single-pass directory scanning
+  - Cleanup of excluded files uses Python for ~10x faster deletion (vs PowerShell loops)
+
 ### v1.17.0 (2026-01-15)
 
 **New Features:**

@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.17.0"
+$script:ConsoleVersion = "1.18.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -4157,8 +4157,9 @@ function Show-DeprecatedBackupFiles {
     Write-Host "║  BACKUP - DEPRECATED FILES                 ║" -ForegroundColor Cyan
     Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
 
-    Write-Host "This will scan for files in the backup that no longer exist in the source." -ForegroundColor Yellow
-    Write-Host "These are files that were previously backed up but have since been deleted." -ForegroundColor Gray
+    Write-Host "This will scan for files in the backup that:" -ForegroundColor Yellow
+    Write-Host "  1. No longer exist in the source (deleted files)" -ForegroundColor Gray
+    Write-Host "  2. Match current exclusion patterns (newly excluded)" -ForegroundColor Gray
     Write-Host ""
 
     $backupScriptPath = Get-BackupScriptPath
@@ -4202,110 +4203,273 @@ function Show-DeprecatedBackupFiles {
     $null = robocopy "$source" "$destination" /L /MIR /R:0 /W:0 /LOG:"$tempLog" /NP /NDL /XJ 2>&1
 
     # Parse log for EXTRA files (files that exist in destination but not source)
+    $extraFiles = @()
+    $extraDirs = @()
     if (Test-Path $tempLog) {
         $logContent = Get-Content $tempLog
-        $extraFiles = $logContent | Where-Object { $_ -match '\*EXTRA File' }
-        $extraDirs = $logContent | Where-Object { $_ -match '\*EXTRA Dir' }
+        $extraFiles = @($logContent | Where-Object { $_ -match '\*EXTRA File' })
+        $extraDirs = @($logContent | Where-Object { $_ -match '\*EXTRA Dir' })
+    }
 
-        $extraFileCount = $extraFiles.Count
-        $extraDirCount = $extraDirs.Count
+    $extraFileCount = $extraFiles.Count
+    $extraDirCount = $extraDirs.Count
 
-        if ($extraFileCount -eq 0 -and $extraDirCount -eq 0) {
-            Write-Host "✅ No deprecated files found! Backup is clean." -ForegroundColor Green
-            Remove-Item $tempLog -Force -ErrorAction SilentlyContinue
-            Invoke-StandardPause
-            return
-        }
+    # --- Scan for files matching exclusion patterns using Python (faster) ---
+    $excludedInBackup = @()
+    $excludedDirsInBackup = @()
 
-        Write-Host "Found deprecated items:" -ForegroundColor Yellow
-        Write-Host "  Files: $extraFileCount" -ForegroundColor White
-        Write-Host "  Directories: $extraDirCount" -ForegroundColor White
-        Write-Host ""
+    $scanScript = Join-Path $scriptDir "scan-excluded.py"
+    if (Test-Path $scanScript) {
+        Write-Host "Scanning backup for items matching exclusion patterns..." -ForegroundColor Cyan
 
-        # Show first 20 items as preview
-        Write-Host "Preview (first 20 items):" -ForegroundColor Cyan
-        $preview = ($extraFiles + $extraDirs) | Select-Object -First 20
-        foreach ($item in $preview) {
-            # Extract just the filename from the robocopy output
-            if ($item -match '\*EXTRA (File|Dir)\s+(.+)$') {
-                $type = $matches[1]
-                $path = $matches[2].Trim()
-                if ($type -eq "File") {
-                    Write-Host "  [F] $path" -ForegroundColor Gray
-                } else {
-                    Write-Host "  [D] $path" -ForegroundColor DarkGray
-                }
+        try {
+            $scanResult = python "$scanScript" "$destination" "$configPath" 2>&1
+            $scanData = $scanResult | ConvertFrom-Json
+
+            if ($scanData.directories) {
+                $excludedDirsInBackup = @($scanData.directories)
+            }
+            if ($scanData.files) {
+                $excludedInBackup = @($scanData.files)
             }
         }
-
-        if (($extraFileCount + $extraDirCount) -gt 20) {
-            Write-Host "  ... and $(($extraFileCount + $extraDirCount) - 20) more" -ForegroundColor DarkGray
+        catch {
+            Write-Host "  Warning: Could not scan for excluded files: $($_.Exception.Message)" -ForegroundColor Yellow
         }
+    }
 
-        Write-Host ""
-        Write-Host "Options:" -ForegroundColor Cyan
-        Write-Host "  1. View full list in VS Code" -ForegroundColor White
-        Write-Host "  2. Clean deprecated files (DELETE them from backup)" -ForegroundColor Red
-        Write-Host "  3. Cancel" -ForegroundColor Gray
-        Write-Host ""
+    $excludedFileCount = $excludedInBackup.Count
+    $excludedDirCount = $excludedDirsInBackup.Count
 
-        $choice = Read-Host "Select option (1-3)"
+    # Check if anything was found
+    $totalFiles = $extraFileCount + $excludedFileCount
+    $totalDirs = $extraDirCount + $excludedDirCount
 
-        switch ($choice) {
-            "1" {
-                # Create a readable report
-                $reportPath = Join-Path $env:TEMP "backup-deprecated-files.txt"
-                $report = @()
-                $report += "Deprecated Backup Files Report"
-                $report += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-                $report += "Source: $source"
-                $report += "Backup: $destination"
-                $report += ""
-                $report += "Summary:"
-                $report += "  Files: $extraFileCount"
-                $report += "  Directories: $extraDirCount"
-                $report += ""
-                $report += "=" * 80
-                $report += ""
+    if ($totalFiles -eq 0 -and $totalDirs -eq 0) {
+        Write-Host "✅ No deprecated files found! Backup is clean." -ForegroundColor Green
+        Remove-Item $tempLog -Force -ErrorAction SilentlyContinue
+        Invoke-StandardPause
+        return
+    }
 
-                if ($extraDirs.Count -gt 0) {
-                    $report += "DIRECTORIES ($extraDirCount):"
-                    $report += "-" * 80
-                    foreach ($item in $extraDirs) {
-                        if ($item -match '\*EXTRA Dir\s+(.+)$') {
-                            $report += "  $($matches[1].Trim())"
-                        }
-                    }
-                    $report += ""
-                }
+    # Display summary
+    Write-Host "Found deprecated items:" -ForegroundColor Yellow
+    if ($extraFileCount -gt 0 -or $extraDirCount -gt 0) {
+        Write-Host "  Deleted from source:" -ForegroundColor White
+        Write-Host "    Files: $extraFileCount" -ForegroundColor Gray
+        Write-Host "    Directories: $extraDirCount" -ForegroundColor Gray
+    }
+    if ($excludedFileCount -gt 0 -or $excludedDirCount -gt 0) {
+        Write-Host "  Matching exclusion patterns:" -ForegroundColor Magenta
+        Write-Host "    Files: $excludedFileCount" -ForegroundColor Gray
+        Write-Host "    Directories: $excludedDirCount" -ForegroundColor Gray
+    }
+    Write-Host ""
 
-                if ($extraFiles.Count -gt 0) {
-                    $report += "FILES ($extraFileCount):"
-                    $report += "-" * 80
-                    foreach ($item in $extraFiles) {
-                        if ($item -match '\*EXTRA File\s+(.+)$') {
-                            $report += "  $($matches[1].Trim())"
-                        }
-                    }
-                }
+    # Show first 20 items as preview
+    Write-Host "Preview (first 20 items):" -ForegroundColor Cyan
+    $previewCount = 0
 
-                Set-Content -Path $reportPath -Value $report
-                Invoke-Expression "code '$reportPath'"
-                Write-Host "✅ Report opened in VS Code" -ForegroundColor Green
+    # Show deleted files/dirs first
+    foreach ($item in ($extraFiles + $extraDirs)) {
+        if ($previewCount -ge 20) { break }
+        if ($item -match '\*EXTRA (File|Dir)\s+(.+)$') {
+            $type = $matches[1]
+            $path = $matches[2].Trim()
+            if ($type -eq "File") {
+                Write-Host "  [F] $path" -ForegroundColor Gray
+            } else {
+                Write-Host "  [D] $path" -ForegroundColor DarkGray
             }
-            "2" {
-                Write-Host ""
-                Write-Host "⚠️  WARNING: This will PERMANENTLY DELETE $($extraFileCount + $extraDirCount) items from:" -ForegroundColor Red
-                Write-Host "  $destination" -ForegroundColor Yellow
-                Write-Host ""
-                Write-Host "This action CANNOT be undone!" -ForegroundColor Red
-                Write-Host ""
-                $confirm = Read-Host "Type 'DELETE' to confirm"
+            $previewCount++
+        }
+    }
 
-                if ($confirm -eq "DELETE") {
-                    Write-Host ""
-                    Write-Host "Cleaning deprecated files..." -ForegroundColor Yellow
-                    Write-Host ""
+    # Show excluded items
+    foreach ($dir in $excludedDirsInBackup) {
+        if ($previewCount -ge 20) { break }
+        Write-Host "  [D] $dir" -ForegroundColor Magenta
+        $previewCount++
+    }
+    foreach ($file in $excludedInBackup) {
+        if ($previewCount -ge 20) { break }
+        Write-Host "  [F] $file" -ForegroundColor Magenta
+        $previewCount++
+    }
+
+    if (($totalFiles + $totalDirs) -gt 20) {
+        Write-Host "  ... and $(($totalFiles + $totalDirs) - 20) more" -ForegroundColor DarkGray
+    }
+
+    Write-Host ""
+    Write-Host "Options:" -ForegroundColor Cyan
+    Write-Host "  1. View full list in VS Code" -ForegroundColor White
+    Write-Host "  2. Clean deprecated files (DELETE them from backup)" -ForegroundColor Red
+    Write-Host "  3. Cancel" -ForegroundColor Gray
+    Write-Host ""
+
+    $choice = Read-Host "Select option (1-3)"
+
+    switch ($choice) {
+        "1" {
+            # Create a readable report
+            $reportPath = Join-Path $env:TEMP "backup-deprecated-files.txt"
+            $report = @()
+            $report += "Deprecated Backup Files Report"
+            $report += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+            $report += "Source: $source"
+            $report += "Backup: $destination"
+            $report += ""
+            $report += "Summary:"
+            $report += "  Deleted from source:"
+            $report += "    Files: $extraFileCount"
+            $report += "    Directories: $extraDirCount"
+            $report += "  Matching exclusion patterns:"
+            $report += "    Files: $excludedFileCount"
+            $report += "    Directories: $excludedDirCount"
+            $report += ""
+            $report += "=" * 80
+            $report += ""
+
+            if ($extraDirs.Count -gt 0) {
+                $report += "DELETED DIRECTORIES ($extraDirCount):"
+                $report += "-" * 80
+                foreach ($item in $extraDirs) {
+                    if ($item -match '\*EXTRA Dir\s+(.+)$') {
+                        $report += "  $($matches[1].Trim())"
+                    }
+                }
+                $report += ""
+            }
+
+            if ($extraFiles.Count -gt 0) {
+                $report += "DELETED FILES ($extraFileCount):"
+                $report += "-" * 80
+                foreach ($item in $extraFiles) {
+                    if ($item -match '\*EXTRA File\s+(.+)$') {
+                        $report += "  $($matches[1].Trim())"
+                    }
+                }
+                $report += ""
+            }
+
+            if ($excludedDirsInBackup.Count -gt 0) {
+                $report += "EXCLUDED DIRECTORIES ($excludedDirCount):"
+                $report += "-" * 80
+                foreach ($dir in $excludedDirsInBackup) {
+                    $report += "  $dir"
+                }
+                $report += ""
+            }
+
+            if ($excludedInBackup.Count -gt 0) {
+                $report += "EXCLUDED FILES ($excludedFileCount):"
+                $report += "-" * 80
+                foreach ($file in $excludedInBackup) {
+                    $report += "  $file"
+                }
+            }
+
+            Set-Content -Path $reportPath -Value $report
+            Invoke-Expression "code '$reportPath'"
+            Write-Host "✅ Report opened in VS Code" -ForegroundColor Green
+        }
+        "2" {
+            Write-Host ""
+            Write-Host "⚠️  WARNING: This will PERMANENTLY DELETE $($totalFiles + $totalDirs) items from:" -ForegroundColor Red
+            Write-Host "  $destination" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "This action CANNOT be undone!" -ForegroundColor Red
+            Write-Host ""
+            $confirm = Read-Host "Type 'DELETE' to confirm"
+
+            if ($confirm -eq "DELETE") {
+                Write-Host ""
+                Write-Host "Cleaning deprecated files..." -ForegroundColor Yellow
+                Write-Host ""
+
+                $script:deletedDirs = 0
+                $script:deletedFiles = 0
+
+                # First, delete excluded items (files that exist in source but are now excluded)
+                if ($excludedDirsInBackup.Count -gt 0 -or $excludedInBackup.Count -gt 0) {
+                    Write-Host "Removing items matching exclusion patterns..." -ForegroundColor Cyan
+
+                    # Use Python script for fast deletion
+                    $scanScript = Join-Path $scriptDir "scan-excluded.py"
+                    if (Test-Path $scanScript) {
+                        try {
+                            $deleteResult = python "$scanScript" "$destination" "$configPath" --delete 2>&1
+                            $deleteData = $deleteResult | ConvertFrom-Json
+                            $script:deletedDirs = $deleteData.deleted_dirs
+                            $script:deletedFiles = $deleteData.deleted_files
+
+                            if ($deleteData.errors -and $deleteData.errors.Count -gt 0) {
+                                foreach ($err in $deleteData.errors) {
+                                    Write-Host "  Failed: $err" -ForegroundColor Red
+                                }
+                            }
+                        } catch {
+                            Write-Host "  Warning: Python deletion failed, using fallback method..." -ForegroundColor Yellow
+
+                            # Fallback to PowerShell if Python fails
+                            foreach ($dir in $excludedDirsInBackup) {
+                                $fullPath = Join-Path $destination $dir
+                                if (Test-Path $fullPath) {
+                                    try {
+                                        Remove-Item -Path $fullPath -Recurse -Force -ErrorAction Stop
+                                        $script:deletedDirs++
+                                    } catch {
+                                        Write-Host "  Failed to delete: $dir" -ForegroundColor Red
+                                    }
+                                }
+                            }
+
+                            foreach ($file in $excludedInBackup) {
+                                $fullPath = Join-Path $destination $file
+                                if (Test-Path $fullPath) {
+                                    try {
+                                        Remove-Item -Path $fullPath -Force -ErrorAction Stop
+                                        $script:deletedFiles++
+                                    } catch {
+                                        Write-Host "  Failed to delete: $file" -ForegroundColor Red
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        # Fallback if Python script not found
+                        foreach ($dir in $excludedDirsInBackup) {
+                            $fullPath = Join-Path $destination $dir
+                            if (Test-Path $fullPath) {
+                                try {
+                                    Remove-Item -Path $fullPath -Recurse -Force -ErrorAction Stop
+                                    $script:deletedDirs++
+                                } catch {
+                                    Write-Host "  Failed to delete: $dir" -ForegroundColor Red
+                                }
+                            }
+                        }
+
+                        foreach ($file in $excludedInBackup) {
+                            $fullPath = Join-Path $destination $file
+                            if (Test-Path $fullPath) {
+                                try {
+                                    Remove-Item -Path $fullPath -Force -ErrorAction Stop
+                                    $script:deletedFiles++
+                                } catch {
+                                    Write-Host "  Failed to delete: $file" -ForegroundColor Red
+                                }
+                            }
+                        }
+                    }
+
+                    Write-Host "  Removed $($script:deletedDirs) excluded dirs, $($script:deletedFiles) excluded files" -ForegroundColor Gray
+                }
+
+                # Then, use robocopy to clean up files deleted from source
+                if ($extraFileCount -gt 0 -or $extraDirCount -gt 0) {
+                    Write-Host "Removing items deleted from source..." -ForegroundColor Cyan
 
                     # Create a temporary log for the cleanup operation
                     $cleanupLog = Join-Path $env:TEMP "backup-cleanup.txt"
@@ -4317,9 +4481,8 @@ function Show-DeprecatedBackupFiles {
                         Invoke-Expression $cmd
                     } -ArgumentList $source, $destination, $cleanupLog
 
-                    # Progress tracking
-                    $script:deletedDirs = 0
-                    $script:deletedFiles = 0
+                    $robocopyDeletedDirs = 0
+                    $robocopyDeletedFiles = 0
                     $script:lastUpdateTime = Get-Date
 
                     # Monitor job progress
@@ -4331,16 +4494,14 @@ function Show-DeprecatedBackupFiles {
                                 $logContent = Get-Content $cleanupLog -ErrorAction SilentlyContinue
 
                                 # Count deletions
-                                $extraDirsFound = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
-                                $extraFilesFound = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
-                                $script:deletedDirs = $extraDirsFound
-                                $script:deletedFiles = $extraFilesFound
+                                $robocopyDeletedDirs = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
+                                $robocopyDeletedFiles = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
 
                                 # Update progress every 500ms
                                 $elapsed = (Get-Date) - $script:lastUpdateTime
                                 if ($elapsed.TotalMilliseconds -ge 500) {
-                                    $percentage = [math]::Min([math]::Floor((($script:deletedDirs + $script:deletedFiles) / ($extraDirCount + $extraFileCount)) * 100), 100)
-                                    Write-Host "`rProgress: $percentage% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
+                                    $percentage = [math]::Min([math]::Floor((($robocopyDeletedDirs + $robocopyDeletedFiles) / ($extraDirCount + $extraFileCount)) * 100), 100)
+                                    Write-Host "`r  Progress: $percentage% | Deleted: $robocopyDeletedDirs dirs, $robocopyDeletedFiles files" -NoNewline -ForegroundColor Yellow
                                     $script:lastUpdateTime = Get-Date
                                 }
                             }
@@ -4353,30 +4514,33 @@ function Show-DeprecatedBackupFiles {
                     # Wait for job to complete
                     $null = Receive-Job $cleanupJob -Wait -AutoRemoveJob
 
-                    # Final count
+                    # Final count from robocopy
                     if (Test-Path $cleanupLog) {
                         $logContent = Get-Content $cleanupLog -ErrorAction SilentlyContinue
-                        $script:deletedDirs = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
-                        $script:deletedFiles = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
+                        $robocopyDeletedDirs = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
+                        $robocopyDeletedFiles = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
                         Remove-Item $cleanupLog -Force -ErrorAction SilentlyContinue
                     }
 
                     Write-Host "`r                                                                      " -NoNewline
-                    Write-Host "`r✅ Cleanup complete! Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -ForegroundColor Green
-                } else {
-                    Write-Host "Cleanup cancelled." -ForegroundColor Yellow
-                }
-            }
-            default {
-                Write-Host "Operation cancelled." -ForegroundColor Yellow
-            }
-        }
+                    Write-Host "`r  Removed $robocopyDeletedDirs deleted dirs, $robocopyDeletedFiles deleted files" -ForegroundColor Gray
 
-        Remove-Item $tempLog -Force -ErrorAction SilentlyContinue
-    } else {
-        Write-Host "❌ Failed to create scan log" -ForegroundColor Red
+                    $script:deletedDirs += $robocopyDeletedDirs
+                    $script:deletedFiles += $robocopyDeletedFiles
+                }
+
+            Write-Host ""
+            Write-Host "✅ Cleanup complete! Total deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -ForegroundColor Green
+        } else {
+            Write-Host "Cleanup cancelled." -ForegroundColor Yellow
+        }
+    }
+    default {
+        Write-Host "Operation cancelled." -ForegroundColor Yellow
+    }
     }
 
+    Remove-Item $tempLog -Force -ErrorAction SilentlyContinue
     Invoke-StandardPause
 }
 
