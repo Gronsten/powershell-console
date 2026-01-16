@@ -97,7 +97,7 @@ def remove_readonly(func, path, excinfo):
     func(path)
 
 
-def delete_excluded(backup_path: str, directories: list[str], files: list[str]) -> dict:
+def delete_excluded(backup_path: str, directories: list[str], files: list[str], show_progress: bool = True) -> dict:
     """
     Delete matched directories and files from the backup.
 
@@ -107,13 +107,19 @@ def delete_excluded(backup_path: str, directories: list[str], files: list[str]) 
         - errors: list of error messages
     """
     import stat
+    import time
     backup_path = Path(backup_path)
     deleted_dirs = 0
     deleted_files = 0
     errors = []
 
+    total_dirs = len(directories)
+    total_files = len(files)
+    total_items = total_dirs + total_files
+    last_progress_time = time.time()
+
     # Delete directories first (they may contain matched files)
-    for dir_path in directories:
+    for i, dir_path in enumerate(directories):
         full_path = backup_path / dir_path
         if full_path.exists() and full_path.is_dir():
             try:
@@ -123,8 +129,17 @@ def delete_excluded(backup_path: str, directories: list[str], files: list[str]) 
             except Exception as e:
                 errors.append(f"Dir: {dir_path} - {str(e)}")
 
+        # Output progress to stderr every 500ms
+        if show_progress:
+            current_time = time.time()
+            if current_time - last_progress_time >= 0.5:
+                processed = i + 1
+                pct = int((processed / total_items) * 100) if total_items > 0 else 0
+                print(f"PROGRESS:{pct}:{deleted_dirs}:{deleted_files}:{processed}:{total_items}", file=sys.stderr, flush=True)
+                last_progress_time = current_time
+
     # Delete files
-    for file_path in files:
+    for i, file_path in enumerate(files):
         full_path = backup_path / file_path
         if full_path.exists() and full_path.is_file():
             try:
@@ -135,6 +150,15 @@ def delete_excluded(backup_path: str, directories: list[str], files: list[str]) 
                 deleted_files += 1
             except Exception as e:
                 errors.append(f"File: {file_path} - {str(e)}")
+
+        # Output progress to stderr every 500ms
+        if show_progress:
+            current_time = time.time()
+            if current_time - last_progress_time >= 0.5:
+                processed = total_dirs + i + 1
+                pct = int((processed / total_items) * 100) if total_items > 0 else 0
+                print(f"PROGRESS:{pct}:{deleted_dirs}:{deleted_files}:{processed}:{total_items}", file=sys.stderr, flush=True)
+                last_progress_time = current_time
 
     return {
         'deleted_dirs': deleted_dirs,

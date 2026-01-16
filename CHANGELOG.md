@@ -40,10 +40,11 @@ All notable changes to this project have been documented during development.
   - Python cleanup now clears read-only attribute before deletion
   - Fixes "WinError 5 Access is denied" errors when cleaning excluded `.git` directories
 
-- **backup-dev: Progress indication during robocopy cleanup** - Added real-time progress
-  - Shows deletion progress percentage and item counts during cleanup
-  - Uses shared file access to read robocopy log without locking issues
-  - Added `/V /X` flags to robocopy for verbose EXTRA file logging
+- **backup-dev: Progress indication during cleanup** - Real-time feedback for both cleanup phases
+  - Python deletion: Shows percentage, deleted counts, and items processed
+  - Robocopy sync: Shows animated spinner, elapsed time, and progress when available
+  - Progress updates every 500ms during both operations
+  - No more "hanging" appearance during long cleanup operations
 
 ### v1.17.0 (2026-01-15)
 

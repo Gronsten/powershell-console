@@ -4395,12 +4395,72 @@ function Show-DeprecatedBackupFiles {
                 if ($excludedDirsInBackup.Count -gt 0 -or $excludedInBackup.Count -gt 0) {
                     Write-Host "Removing items matching exclusion patterns..." -ForegroundColor Cyan
 
-                    # Use Python script for fast deletion
+                    # Use Python script for fast deletion with progress
                     $scanScript = Join-Path $scriptDir "scan-excluded.py"
                     if (Test-Path $scanScript) {
                         try {
-                            $deleteResult = python "$scanScript" "$destination" "$configPath" --delete 2>&1
-                            $deleteData = $deleteResult | ConvertFrom-Json
+                            # Run Python in background job to capture stderr progress
+                            $pythonJob = Start-Job -ScriptBlock {
+                                param($script, $dest, $config)
+                                $psi = New-Object System.Diagnostics.ProcessStartInfo
+                                $psi.FileName = "python"
+                                $psi.Arguments = "`"$script`" `"$dest`" `"$config`" --delete"
+                                $psi.UseShellExecute = $false
+                                $psi.RedirectStandardOutput = $true
+                                $psi.RedirectStandardError = $true
+                                $psi.CreateNoWindow = $true
+
+                                $process = [System.Diagnostics.Process]::Start($psi)
+
+                                # Read stderr for progress updates
+                                while (-not $process.StandardError.EndOfStream) {
+                                    $line = $process.StandardError.ReadLine()
+                                    if ($line) {
+                                        Write-Output "STDERR:$line"
+                                    }
+                                }
+
+                                # Read stdout for JSON result
+                                $stdout = $process.StandardOutput.ReadToEnd()
+                                $process.WaitForExit()
+
+                                Write-Output "STDOUT:$stdout"
+                            } -ArgumentList $scanScript, $destination, $configPath
+
+                            $totalExpected = $excludedDirsInBackup.Count + $excludedInBackup.Count
+                            $lastProgress = ""
+
+                            # Monitor job for progress
+                            while ($pythonJob.State -eq 'Running') {
+                                Start-Sleep -Milliseconds 200
+                                $output = Receive-Job $pythonJob -Keep 2>$null
+                                if ($output) {
+                                    foreach ($line in $output) {
+                                        if ($line -match '^STDERR:PROGRESS:(\d+):(\d+):(\d+):(\d+):(\d+)$') {
+                                            $pct = $Matches[1]
+                                            $dirs = $Matches[2]
+                                            $files = $Matches[3]
+                                            $processed = $Matches[4]
+                                            $total = $Matches[5]
+                                            $progressLine = "  Progress: $pct% | Deleted: $dirs dirs, $files files ($processed / $total)"
+                                            if ($progressLine -ne $lastProgress) {
+                                                Write-Host "`r$progressLine" -NoNewline -ForegroundColor Yellow
+                                                $lastProgress = $progressLine
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            # Get final output
+                            $finalOutput = Receive-Job $pythonJob -Wait -AutoRemoveJob
+                            $jsonResult = ($finalOutput | Where-Object { $_ -match '^STDOUT:' }) -replace '^STDOUT:', ''
+
+                            # Clear progress line
+                            Write-Host "`r                                                                              " -NoNewline
+                            Write-Host "`r" -NoNewline
+
+                            $deleteData = $jsonResult | ConvertFrom-Json
                             $script:deletedDirs = $deleteData.deleted_dirs
                             $script:deletedFiles = $deleteData.deleted_files
 
@@ -4413,6 +4473,9 @@ function Show-DeprecatedBackupFiles {
                             Write-Host "  Warning: Python deletion failed, using fallback method..." -ForegroundColor Yellow
 
                             # Fallback to PowerShell if Python fails
+                            $totalItems = $excludedDirsInBackup.Count + $excludedInBackup.Count
+                            $processed = 0
+
                             foreach ($dir in $excludedDirsInBackup) {
                                 $fullPath = Join-Path $destination $dir
                                 if (Test-Path $fullPath) {
@@ -4423,6 +4486,9 @@ function Show-DeprecatedBackupFiles {
                                         Write-Host "  Failed to delete: $dir" -ForegroundColor Red
                                     }
                                 }
+                                $processed++
+                                $pct = [math]::Floor(($processed / $totalItems) * 100)
+                                Write-Host "`r  Progress: $pct% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
                             }
 
                             foreach ($file in $excludedInBackup) {
@@ -4435,10 +4501,17 @@ function Show-DeprecatedBackupFiles {
                                         Write-Host "  Failed to delete: $file" -ForegroundColor Red
                                     }
                                 }
+                                $processed++
+                                $pct = [math]::Floor(($processed / $totalItems) * 100)
+                                Write-Host "`r  Progress: $pct% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
                             }
+                            Write-Host ""
                         }
                     } else {
                         # Fallback if Python script not found
+                        $totalItems = $excludedDirsInBackup.Count + $excludedInBackup.Count
+                        $processed = 0
+
                         foreach ($dir in $excludedDirsInBackup) {
                             $fullPath = Join-Path $destination $dir
                             if (Test-Path $fullPath) {
@@ -4449,6 +4522,9 @@ function Show-DeprecatedBackupFiles {
                                     Write-Host "  Failed to delete: $dir" -ForegroundColor Red
                                 }
                             }
+                            $processed++
+                            $pct = [math]::Floor(($processed / $totalItems) * 100)
+                            Write-Host "`r  Progress: $pct% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
                         }
 
                         foreach ($file in $excludedInBackup) {
@@ -4461,7 +4537,11 @@ function Show-DeprecatedBackupFiles {
                                     Write-Host "  Failed to delete: $file" -ForegroundColor Red
                                 }
                             }
+                            $processed++
+                            $pct = [math]::Floor(($processed / $totalItems) * 100)
+                            Write-Host "`r  Progress: $pct% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
                         }
+                        Write-Host ""
                     }
 
                     Write-Host "  Removed $($script:deletedDirs) excluded dirs, $($script:deletedFiles) excluded files" -ForegroundColor Gray
@@ -4474,53 +4554,63 @@ function Show-DeprecatedBackupFiles {
                     # Create a temporary log for the cleanup operation
                     $cleanupLog = Join-Path $env:TEMP "backup-cleanup.txt"
 
-                    # Start robocopy in background with verbose logging to track deletions
-                    # /V enables verbose output which logs deletions
-                    # /X reports all EXTRA files (those in destination but not source)
+                    # Start robocopy in background with verbose logging
                     $cleanupJob = Start-Job -ScriptBlock {
                         param($src, $dst, $log)
-                        $cmd = "robocopy `"$src`" `"$dst`" /MIR /R:3 /W:5 /LOG:`"$log`" /NP /XJ /V /X 2>&1"
+                        # Use /TEE to write to both log and stdout for progress monitoring
+                        $cmd = "robocopy `"$src`" `"$dst`" /MIR /R:3 /W:5 /LOG:`"$log`" /NP /XJ /X 2>&1"
                         Invoke-Expression $cmd
                     } -ArgumentList $source, $destination, $cleanupLog
 
                     $robocopyDeletedDirs = 0
                     $robocopyDeletedFiles = 0
-                    $script:lastUpdateTime = Get-Date
+                    $startTime = Get-Date
                     $totalExpected = $extraDirCount + $extraFileCount
+                    $spinnerChars = @('|', '/', '-', '\')
+                    $spinnerIndex = 0
+                    $lastLogSize = 0
 
-                    # Monitor job progress by counting log entries
+                    # Monitor job progress with activity indicator
                     while ($cleanupJob.State -eq 'Running') {
-                        Start-Sleep -Milliseconds 300
+                        Start-Sleep -Milliseconds 250
 
+                        $elapsed = (Get-Date) - $startTime
+                        $elapsedStr = "{0:mm\:ss}" -f $elapsed
+                        $spinner = $spinnerChars[$spinnerIndex % 4]
+                        $spinnerIndex++
+
+                        # Try to read current progress from log file
+                        $currentProcessed = 0
                         if (Test-Path $cleanupLog) {
                             try {
-                                # Read log with shared access to avoid locking issues
-                                $logStream = [System.IO.File]::Open($cleanupLog, 'Open', 'Read', 'ReadWrite')
-                                $reader = New-Object System.IO.StreamReader($logStream)
-                                $logContent = $reader.ReadToEnd()
-                                $reader.Close()
-                                $logStream.Close()
+                                # Check file size as activity indicator
+                                $logFile = Get-Item $cleanupLog -ErrorAction SilentlyContinue
+                                if ($logFile) {
+                                    $currentLogSize = $logFile.Length
+                                    if ($currentLogSize -ne $lastLogSize) {
+                                        $lastLogSize = $currentLogSize
 
-                                # Count EXTRA entries (items being deleted)
-                                # In verbose mode with /X, EXTRA items are marked
-                                $extraMatches = [regex]::Matches($logContent, '\*EXTRA')
-                                $currentDeleted = $extraMatches.Count
+                                        # Try to count EXTRA entries
+                                        $logStream = [System.IO.FileStream]::new($cleanupLog, 'Open', 'Read', 'ReadWrite')
+                                        $reader = New-Object System.IO.StreamReader($logStream)
+                                        $logContent = $reader.ReadToEnd()
+                                        $reader.Close()
+                                        $logStream.Close()
 
-                                # Update progress every 500ms
-                                $elapsed = (Get-Date) - $script:lastUpdateTime
-                                if ($elapsed.TotalMilliseconds -ge 500) {
-                                    if ($totalExpected -gt 0) {
-                                        $percentage = [math]::Min([math]::Floor(($currentDeleted / $totalExpected) * 100), 100)
-                                        Write-Host "`r  Progress: $percentage% | Processing: $currentDeleted / $totalExpected items" -NoNewline -ForegroundColor Yellow
-                                    } else {
-                                        Write-Host "`r  Processing: $currentDeleted items..." -NoNewline -ForegroundColor Yellow
+                                        $currentProcessed = ([regex]::Matches($logContent, '\*EXTRA')).Count
                                     }
-                                    $script:lastUpdateTime = Get-Date
                                 }
+                            } catch {
+                                # Log locked, continue with spinner
                             }
-                            catch {
-                                # Log might be locked, skip this iteration
-                            }
+                        }
+
+                        # Show progress with spinner
+                        if ($totalExpected -gt 0 -and $currentProcessed -gt 0) {
+                            $pct = [math]::Min([math]::Floor(($currentProcessed / $totalExpected) * 100), 100)
+                            Write-Host "`r  $spinner Progress: $pct% | Processed: $currentProcessed / $totalExpected | Elapsed: $elapsedStr" -NoNewline -ForegroundColor Yellow
+                        } else {
+                            Write-Host "`r  $spinner Working... | Expected: $totalExpected items | Elapsed: $elapsedStr" -NoNewline -ForegroundColor Yellow
                         }
                     }
 
@@ -4542,7 +4632,7 @@ function Show-DeprecatedBackupFiles {
                         Remove-Item $cleanupLog -Force -ErrorAction SilentlyContinue
                     }
 
-                    Write-Host "`r                                                                      " -NoNewline
+                    Write-Host "`r                                                                                        " -NoNewline
                     Write-Host "`r  Removed $robocopyDeletedDirs deleted dirs, $robocopyDeletedFiles deleted files" -ForegroundColor Gray
 
                     $script:deletedDirs += $robocopyDeletedDirs
