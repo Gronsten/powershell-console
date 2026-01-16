@@ -4400,19 +4400,22 @@ function Show-DeprecatedBackupFiles {
                     # Use Python delete script with scan result file
                     $deleteScript = Join-Path $scriptDir "delete-excluded.py"
                     $scanResultFile = Join-Path $env:TEMP "backup-scan-result.json"
+                    $deleteResultFile = Join-Path $env:TEMP "backup-delete-result.json"
 
                     if ((Test-Path $deleteScript) -and (Test-Path $scanResultFile)) {
                         try {
-                            # Run delete script - it shows its own progress bar
-                            $deleteOutput = python "$deleteScript" "$destination" "$scanResultFile" 2>&1
-                            Write-Host $deleteOutput
+                            # Run delete script directly - output streams to console in real-time
+                            # Use Start-Process with -Wait and -NoNewWindow for live progress display
+                            $null = Start-Process -FilePath "python" `
+                                -ArgumentList "`"$deleteScript`" `"$destination`" `"$scanResultFile`" --output `"$deleteResultFile`"" `
+                                -NoNewWindow -Wait -PassThru
 
-                            # Parse JSON result from output
-                            $jsonMatch = $deleteOutput -match '(?s)--- JSON Result ---\s*(\{.*\})'
-                            if ($jsonMatch -and $Matches[1]) {
-                                $deleteData = $Matches[1] | ConvertFrom-Json
+                            # Read result from output file
+                            if (Test-Path $deleteResultFile) {
+                                $deleteData = Get-Content $deleteResultFile -Raw | ConvertFrom-Json
                                 $script:deletedDirs = $deleteData.deleted_dirs
                                 $script:deletedFiles = $deleteData.deleted_files
+                                Remove-Item $deleteResultFile -Force -ErrorAction SilentlyContinue
                             }
 
                             # Clean up scan result file

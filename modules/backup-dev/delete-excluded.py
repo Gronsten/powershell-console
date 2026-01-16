@@ -133,6 +133,7 @@ def main():
     parser.add_argument('backup_path', help='Path to backup directory')
     parser.add_argument('scan_result', help='Path to scan result JSON file')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be deleted without deleting')
+    parser.add_argument('--output', '-o', help='Save result JSON to file (for PowerShell integration)')
 
     args = parser.parse_args()
 
@@ -176,9 +177,11 @@ def main():
         if len(result['errors']) > 10:
             print(f"  ... and {len(result['errors']) - 10} more errors")
 
-    # Output JSON result to stdout for programmatic use
-    print(f"\n--- JSON Result ---")
-    print(json.dumps(result, indent=2))
+    # Save result to file if requested (for PowerShell integration)
+    if args.output:
+        with open(args.output, 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2)
+        print(f"\nResult saved to: {args.output}")
 
 
 if __name__ == '__main__':
