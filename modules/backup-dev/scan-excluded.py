@@ -175,6 +175,7 @@ def main():
     parser.add_argument('config_path', help='Path to config.json')
     parser.add_argument('--pretty', action='store_true', help='Pretty-print JSON output')
     parser.add_argument('--delete', action='store_true', help='Delete matched files and directories')
+    parser.add_argument('--output', '-o', help='Save scan result to file (for use with delete-excluded.py)')
 
     args = parser.parse_args()
 
@@ -213,10 +214,14 @@ def main():
         result.update(delete_result)
 
     # Output JSON
-    if args.pretty:
-        print(json.dumps(result, indent=2))
+    output_json = json.dumps(result, indent=2) if args.pretty else json.dumps(result)
+
+    if args.output:
+        with open(args.output, 'w', encoding='utf-8') as f:
+            f.write(output_json)
+        print(f"Scan result saved to: {args.output}", file=sys.stderr)
     else:
-        print(json.dumps(result))
+        print(output_json)
 
 
 if __name__ == '__main__':

@@ -4219,12 +4219,14 @@ function Show-DeprecatedBackupFiles {
     $excludedDirsInBackup = @()
 
     $scanScript = Join-Path $scriptDir "scan-excluded.py"
+    $scanResultFile = Join-Path $env:TEMP "backup-scan-result.json"
     if (Test-Path $scanScript) {
         Write-Host "Scanning backup for items matching exclusion patterns..." -ForegroundColor Cyan
 
         try {
-            $scanResult = python "$scanScript" "$destination" "$configPath" 2>&1
-            $scanData = $scanResult | ConvertFrom-Json
+            # Scan and save result to file (for delete script to use later)
+            $null = python "$scanScript" "$destination" "$configPath" --output "$scanResultFile" 2>&1
+            $scanData = Get-Content $scanResultFile -Raw | ConvertFrom-Json
 
             if ($scanData.directories) {
                 $excludedDirsInBackup = @($scanData.directories)
@@ -4395,126 +4397,37 @@ function Show-DeprecatedBackupFiles {
                 if ($excludedDirsInBackup.Count -gt 0 -or $excludedInBackup.Count -gt 0) {
                     Write-Host "Removing items matching exclusion patterns..." -ForegroundColor Cyan
 
-                    # Use Python script for fast deletion with progress
-                    $scanScript = Join-Path $scriptDir "scan-excluded.py"
-                    if (Test-Path $scanScript) {
+                    # Use Python delete script with scan result file
+                    $deleteScript = Join-Path $scriptDir "delete-excluded.py"
+                    $scanResultFile = Join-Path $env:TEMP "backup-scan-result.json"
+
+                    if ((Test-Path $deleteScript) -and (Test-Path $scanResultFile)) {
                         try {
-                            # Use temp files for stdout/stderr to monitor progress
-                            $stdoutFile = Join-Path $env:TEMP "python-delete-stdout.txt"
-                            $stderrFile = Join-Path $env:TEMP "python-delete-stderr.txt"
+                            # Run delete script - it shows its own progress bar
+                            $deleteOutput = python "$deleteScript" "$destination" "$scanResultFile" 2>&1
+                            Write-Host $deleteOutput
 
-                            # Start Python process
-                            $psi = New-Object System.Diagnostics.ProcessStartInfo
-                            $psi.FileName = "python"
-                            $psi.Arguments = "`"$scanScript`" `"$destination`" `"$configPath`" --delete"
-                            $psi.UseShellExecute = $false
-                            $psi.RedirectStandardOutput = $true
-                            $psi.RedirectStandardError = $true
-                            $psi.CreateNoWindow = $true
-
-                            $process = [System.Diagnostics.Process]::Start($psi)
-
-                            $totalExpected = $excludedDirsInBackup.Count + $excludedInBackup.Count
-                            $startTime = Get-Date
-                            $spinnerChars = @('|', '/', '-', '\')
-                            $spinnerIndex = 0
-                            $lastProgress = ""
-
-                            # Monitor process with spinner and progress from stderr
-                            while (-not $process.HasExited) {
-                                Start-Sleep -Milliseconds 250
-
-                                $elapsed = (Get-Date) - $startTime
-                                $elapsedStr = "{0:mm\:ss}" -f $elapsed
-                                $spinner = $spinnerChars[$spinnerIndex % 4]
-                                $spinnerIndex++
-
-                                # Try to read stderr for progress (non-blocking peek)
-                                $progressLine = ""
-                                while ($process.StandardError.Peek() -ge 0) {
-                                    $line = $process.StandardError.ReadLine()
-                                    if ($line -match '^PROGRESS:(\d+):(\d+):(\d+):(\d+):(\d+)$') {
-                                        $pct = $Matches[1]
-                                        $dirs = $Matches[2]
-                                        $files = $Matches[3]
-                                        $processed = $Matches[4]
-                                        $total = $Matches[5]
-                                        $progressLine = "  $spinner Progress: $pct% | Deleted: $dirs dirs, $files files ($processed / $total) | $elapsedStr"
-                                    }
-                                }
-
-                                if ($progressLine) {
-                                    Write-Host "`r$progressLine                    " -NoNewline -ForegroundColor Yellow
-                                    $lastProgress = $progressLine
-                                } elseif (-not $lastProgress) {
-                                    Write-Host "`r  $spinner Working... | Expected: $totalExpected items | Elapsed: $elapsedStr" -NoNewline -ForegroundColor Yellow
-                                } else {
-                                    # Update spinner on existing progress
-                                    $lastProgress = $lastProgress -replace '^\s+.', "  $spinner"
-                                    Write-Host "`r$lastProgress" -NoNewline -ForegroundColor Yellow
-                                }
+                            # Parse JSON result from output
+                            $jsonMatch = $deleteOutput -match '(?s)--- JSON Result ---\s*(\{.*\})'
+                            if ($jsonMatch -and $Matches[1]) {
+                                $deleteData = $Matches[1] | ConvertFrom-Json
+                                $script:deletedDirs = $deleteData.deleted_dirs
+                                $script:deletedFiles = $deleteData.deleted_files
                             }
 
-                            # Read remaining stderr
-                            $null = $process.StandardError.ReadToEnd()
-
-                            # Read stdout for JSON result
-                            $jsonResult = $process.StandardOutput.ReadToEnd()
-                            $process.WaitForExit()
-
-                            # Clear progress line
-                            Write-Host "`r                                                                              " -NoNewline
-                            Write-Host "`r" -NoNewline
-
-                            $deleteData = $jsonResult | ConvertFrom-Json
-                            $script:deletedDirs = $deleteData.deleted_dirs
-                            $script:deletedFiles = $deleteData.deleted_files
-
-                            if ($deleteData.errors -and $deleteData.errors.Count -gt 0) {
-                                foreach ($err in $deleteData.errors) {
-                                    Write-Host "  Failed: $err" -ForegroundColor Red
-                                }
-                            }
+                            # Clean up scan result file
+                            Remove-Item $scanResultFile -Force -ErrorAction SilentlyContinue
                         } catch {
                             Write-Host "  Warning: Python deletion failed ($_), using fallback method..." -ForegroundColor Yellow
-
-                            # Fallback to PowerShell if Python fails
-                            $totalItems = $excludedDirsInBackup.Count + $excludedInBackup.Count
-                            $processed = 0
-
-                            foreach ($dir in $excludedDirsInBackup) {
-                                $fullPath = Join-Path $destination $dir
-                                if (Test-Path $fullPath) {
-                                    try {
-                                        Remove-Item -Path $fullPath -Recurse -Force -ErrorAction Stop
-                                        $script:deletedDirs++
-                                    } catch {
-                                        Write-Host "  Failed to delete: $dir" -ForegroundColor Red
-                                    }
-                                }
-                                $processed++
-                                $pct = [math]::Floor(($processed / $totalItems) * 100)
-                                Write-Host "`r  Progress: $pct% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
-                            }
-
-                            foreach ($file in $excludedInBackup) {
-                                $fullPath = Join-Path $destination $file
-                                if (Test-Path $fullPath) {
-                                    try {
-                                        Remove-Item -Path $fullPath -Force -ErrorAction Stop
-                                        $script:deletedFiles++
-                                    } catch {
-                                        Write-Host "  Failed to delete: $file" -ForegroundColor Red
-                                    }
-                                }
-                                $processed++
-                                $pct = [math]::Floor(($processed / $totalItems) * 100)
-                                Write-Host "`r  Progress: $pct% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
-                            }
-                            Write-Host ""
+                            # Fall through to PowerShell fallback
+                            $useFallback = $true
                         }
                     } else {
-                        # Fallback if Python script not found
+                        $useFallback = $true
+                    }
+
+                    # PowerShell fallback
+                    if ($useFallback) {
                         $totalItems = $excludedDirsInBackup.Count + $excludedInBackup.Count
                         $processed = 0
 
