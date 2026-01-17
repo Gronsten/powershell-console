@@ -20,6 +20,20 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.19.0 (2026-01-16)
+
+**New Features:**
+- **Package Manager: Uninstall from Installed Lists** - Added uninstall capability to "Search Installed Packages" and "List Installed Packages"
+  - Select multiple packages via checkbox selection (same UI as global search)
+  - Pagination for large result sets (batches of 20)
+  - Double confirmation required for uninstalls: Y/N prompt then type "UNINSTALL"
+  - Warning banner displayed before destructive operations
+  - Supports all package managers: Scoop, npm, pip, winget
+
+**Bug Fixes:**
+- **backup-dev: Result files saved to correct location** - `backup-scan-result.json` and `backup-delete-result.json` now saved in the backup-dev module folder instead of temp directory
+- **backup-dev: Menu item renamed** - "Show Deprecated Files" renamed to "Scan Deprecated Files" for clarity
+
 ### v1.18.0 (2026-01-16)
 
 **Enhancements:**

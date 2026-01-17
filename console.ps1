@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.18.0"
+$script:ConsoleVersion = "1.19.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -518,15 +518,87 @@ function Get-InstalledPackages {
     Write-Host "║  INSTALLED PACKAGES                        ║" -ForegroundColor Cyan
     Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
 
+    Write-Host "Select packages to uninstall (or press ESC/Q to exit without changes)`n" -ForegroundColor Gray
+
+    # Collection for uninstall selections
+    $allPackagesToUninstall = @()
+
     # Scoop packages
     Write-Host "📦 Scoop packages:" -ForegroundColor Yellow
     Write-Host ""
     try {
-        $scoopApps = scoop list
-        if ($scoopApps) {
-            $scoopApps | Format-Table Name, Version, Source, Updated -AutoSize | Out-String | Write-Host
-        } else {
+        $scoopList = scoop list 2>&1 | Out-String
+        $scoopLines = $scoopList -split "`n"
+        $scoopPackages = @()
+        $inData = $false
+
+        foreach ($line in $scoopLines) {
+            if ($line -match 'Name.*Version.*Source') {
+                $inData = $true
+                continue
+            }
+            if ($line -match '^-+') {
+                continue
+            }
+            if ($inData -and $line.Trim().Length -gt 0) {
+                $parts = $line -split '\s+' | Where-Object { $_.Trim() -ne '' }
+                if ($parts.Count -ge 2) {
+                    $scoopPackages += @{
+                        Manager = "scoop"
+                        Name = $parts[0]
+                        Version = $parts[1]
+                        Source = if ($parts.Count -ge 3) { $parts[2] } else { "" }
+                        DisplayText = "$($parts[0]) - $($parts[1])"
+                    }
+                }
+            }
+        }
+
+        if ($scoopPackages.Count -eq 0) {
             Write-Host "  No Scoop packages installed" -ForegroundColor Gray
+        } else {
+            Write-Host "  Found $($scoopPackages.Count) package(s)" -ForegroundColor Cyan
+
+            # Use pagination for large lists
+            $batchSize = 20
+            $allSelections = @()
+            $allSelectionsRef = [ref]$allSelections
+
+            if ($scoopPackages.Count -gt $batchSize) {
+                $startIndex = 0
+                $batchNumber = 1
+                $continueSelecting = $true
+
+                while ($continueSelecting -and $startIndex -lt $scoopPackages.Count) {
+                    $endIndex = [Math]::Min($startIndex + $batchSize, $scoopPackages.Count)
+                    $currentBatch = $scoopPackages[$startIndex..($endIndex - 1)]
+
+                    $result = Show-InlineBatchSelection `
+                        -CurrentBatch $currentBatch `
+                        -AllSelections $allSelectionsRef `
+                        -Title "SCOOP PACKAGES (BATCH $batchNumber)" `
+                        -BatchNumber $batchNumber `
+                        -TotalShown $endIndex `
+                        -TotalAvailable $scoopPackages.Count
+
+                    if ($result.Cancelled) {
+                        $continueSelecting = $false
+                    } elseif (-not $result.FetchMore) {
+                        $continueSelecting = $false
+                    }
+
+                    $startIndex = $endIndex
+                    $batchNumber++
+                }
+            } else {
+                $selectedPackages = Show-CheckboxSelection -Items $scoopPackages -Title "SELECT SCOOP PACKAGES TO UNINSTALL"
+                if ($selectedPackages) { $allSelections = $selectedPackages }
+            }
+
+            if ($allSelections.Count -gt 0) {
+                $allPackagesToUninstall += $allSelections
+                Write-Host "`n  ✅ Added $($allSelections.Count) Scoop package(s) to uninstall queue" -ForegroundColor Green
+            }
         }
     } catch {
         Write-Host "  ⚠️  Scoop not found" -ForegroundColor Red
@@ -536,8 +608,70 @@ function Get-InstalledPackages {
     Write-Host "`n📦 npm global packages:" -ForegroundColor Yellow
     Write-Host ""
     try {
-        $npmList = & npm list -g --depth=0 2>&1
-        $npmList | ForEach-Object { Write-Host $_ }
+        $npmList = npm list -g --depth=0 --json 2>&1 | Out-String
+        $npmPackages = @()
+
+        try {
+            $npmData = $npmList | ConvertFrom-Json
+            if ($npmData.dependencies) {
+                foreach ($pkg in $npmData.dependencies.PSObject.Properties) {
+                    $npmPackages += @{
+                        Manager = "npm"
+                        Name = $pkg.Name
+                        Version = $pkg.Value.version
+                        DisplayText = "$($pkg.Name) - $($pkg.Value.version)"
+                    }
+                }
+            }
+        } catch {
+            # JSON parse failed, npm might not be available
+        }
+
+        if ($npmPackages.Count -eq 0) {
+            Write-Host "  No npm global packages installed" -ForegroundColor Gray
+        } else {
+            Write-Host "  Found $($npmPackages.Count) package(s)" -ForegroundColor Cyan
+
+            $batchSize = 20
+            $allSelections = @()
+            $allSelectionsRef = [ref]$allSelections
+
+            if ($npmPackages.Count -gt $batchSize) {
+                $startIndex = 0
+                $batchNumber = 1
+                $continueSelecting = $true
+
+                while ($continueSelecting -and $startIndex -lt $npmPackages.Count) {
+                    $endIndex = [Math]::Min($startIndex + $batchSize, $npmPackages.Count)
+                    $currentBatch = $npmPackages[$startIndex..($endIndex - 1)]
+
+                    $result = Show-InlineBatchSelection `
+                        -CurrentBatch $currentBatch `
+                        -AllSelections $allSelectionsRef `
+                        -Title "NPM PACKAGES (BATCH $batchNumber)" `
+                        -BatchNumber $batchNumber `
+                        -TotalShown $endIndex `
+                        -TotalAvailable $npmPackages.Count
+
+                    if ($result.Cancelled) {
+                        $continueSelecting = $false
+                    } elseif (-not $result.FetchMore) {
+                        $continueSelecting = $false
+                    }
+
+                    $startIndex = $endIndex
+                    $batchNumber++
+                }
+            } else {
+                $selectedPackages = Show-CheckboxSelection -Items $npmPackages -Title "SELECT NPM PACKAGES TO UNINSTALL"
+                if ($selectedPackages) { $allSelections = $selectedPackages }
+            }
+
+            if ($allSelections.Count -gt 0) {
+                $allPackagesToUninstall += $allSelections
+                Write-Host "`n  ✅ Added $($allSelections.Count) npm package(s) to uninstall queue" -ForegroundColor Green
+            }
+        }
     } catch {
         Write-Host "  ⚠️  npm not found" -ForegroundColor Red
     }
@@ -546,46 +680,79 @@ function Get-InstalledPackages {
     Write-Host "`n📦 pip packages:" -ForegroundColor Yellow
     Write-Host ""
     try {
-        # Check if Python is available
         $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
         if (-not $pythonCmd) {
             Write-Host "  ⚠️  Python not found" -ForegroundColor Red
         } else {
-            # Ask if user wants to see dependency tree
-            $showDepTree = Read-Host "Display pip dependency tree (pipdeptree)? (y/N)"
-            Write-Host ""
+            $pipList = pip list 2>&1 | Out-String
+            $pipLines = $pipList -split "`n"
+            $pipPackages = @()
+            $inData = $false
 
-            if ($showDepTree.ToLower() -eq "y") {
-                # Check if pipdeptree is available
-                $pipdeptreeCmd = Get-Command pipdeptree -ErrorAction SilentlyContinue
-                if ($pipdeptreeCmd) {
-                    Write-Host "📊 pip dependency tree:" -ForegroundColor Cyan
-                    Write-Host ""
-                    pipdeptree 2>&1 | ForEach-Object {
-                        if ($_.Trim()) {
-                            Write-Host $_
-                        }
-                    }
-                } else {
-                    Write-Host "  ⚠️  pipdeptree not found" -ForegroundColor Red
-                    Write-Host "  Install with: pip install pipdeptree" -ForegroundColor Gray
-                    Write-Host ""
-                    Write-Host "  Showing standard pip list instead:" -ForegroundColor Gray
-                    Write-Host ""
-                    $pipList = pip list 2>&1 | Out-String
-                    $pipList -split "`n" | ForEach-Object {
-                        if ($_.Trim()) {
-                            Write-Host $_
+            foreach ($line in $pipLines) {
+                if ($line -match '^Package\s+Version') {
+                    $inData = $true
+                    continue
+                }
+                if ($line -match '^-+\s+-+') {
+                    continue
+                }
+                if ($inData -and $line.Trim().Length -gt 0) {
+                    $parts = $line -split '\s+' | Where-Object { $_.Trim() -ne '' }
+                    if ($parts.Count -ge 2) {
+                        $pipPackages += @{
+                            Manager = "pip"
+                            Name = $parts[0]
+                            Version = $parts[1]
+                            DisplayText = "$($parts[0]) - $($parts[1])"
                         }
                     }
                 }
+            }
+
+            if ($pipPackages.Count -eq 0) {
+                Write-Host "  No pip packages installed" -ForegroundColor Gray
             } else {
-                # Show standard pip list
-                $pipList = pip list 2>&1 | Out-String
-                $pipList -split "`n" | ForEach-Object {
-                    if ($_.Trim()) {
-                        Write-Host $_
+                Write-Host "  Found $($pipPackages.Count) package(s)" -ForegroundColor Cyan
+
+                $batchSize = 20
+                $allSelections = @()
+                $allSelectionsRef = [ref]$allSelections
+
+                if ($pipPackages.Count -gt $batchSize) {
+                    $startIndex = 0
+                    $batchNumber = 1
+                    $continueSelecting = $true
+
+                    while ($continueSelecting -and $startIndex -lt $pipPackages.Count) {
+                        $endIndex = [Math]::Min($startIndex + $batchSize, $pipPackages.Count)
+                        $currentBatch = $pipPackages[$startIndex..($endIndex - 1)]
+
+                        $result = Show-InlineBatchSelection `
+                            -CurrentBatch $currentBatch `
+                            -AllSelections $allSelectionsRef `
+                            -Title "PIP PACKAGES (BATCH $batchNumber)" `
+                            -BatchNumber $batchNumber `
+                            -TotalShown $endIndex `
+                            -TotalAvailable $pipPackages.Count
+
+                        if ($result.Cancelled) {
+                            $continueSelecting = $false
+                        } elseif (-not $result.FetchMore) {
+                            $continueSelecting = $false
+                        }
+
+                        $startIndex = $endIndex
+                        $batchNumber++
                     }
+                } else {
+                    $selectedPackages = Show-CheckboxSelection -Items $pipPackages -Title "SELECT PIP PACKAGES TO UNINSTALL"
+                    if ($selectedPackages) { $allSelections = $selectedPackages }
+                }
+
+                if ($allSelections.Count -gt 0) {
+                    $allPackagesToUninstall += $allSelections
+                    Write-Host "`n  ✅ Added $($allSelections.Count) pip package(s) to uninstall queue" -ForegroundColor Green
                 }
             }
         }
@@ -593,89 +760,212 @@ function Get-InstalledPackages {
         Write-Host "  ⚠️  pip not found" -ForegroundColor Red
     }
 
-    # Prompt before showing winget packages
-    Write-Host ""
-    $showWinget = Read-Host "Display winget packages? (Y/n)"
-    if ($showWinget.ToLower() -eq "n") {
-        Write-Host "Skipping winget packages." -ForegroundColor Gray
-        return
-    }
-
     # winget packages
     Write-Host "`n📦 winget packages:" -ForegroundColor Yellow
     Write-Host ""
     try {
-        # Capture winget list output and filter out progress indicators
         $wingetOutput = winget list 2>&1 | Out-String
 
-        # Filter out progress bars and spinner characters
         $cleanedLines = $wingetOutput -split "`n" | Where-Object {
             $line = $_
-            # Skip empty lines
             if (-not $line.Trim()) { return $false }
-            # Skip lines that are just spinner characters
             if ($line -match '^\s*[\-\\/\|]\s*$') { return $false }
-            # Skip lines with only progress indicators
             if ($line.Trim() -match '^[\-\\/\|]$') { return $false }
             return $true
         }
 
-        # Parse and sort winget output
         $headerLine = $null
         $separatorLine = $null
         $dataLines = @()
-        $footerLines = @()
         $inData = $false
 
         foreach ($line in $cleanedLines) {
-            # Detect header line (contains "Name" and "Id" and "Version")
             if ($line -match 'Name.*Id.*Version' -and -not $headerLine) {
                 $headerLine = $line
                 continue
             }
-            # Detect separator line (dashes)
             elseif ($line -match '^-+' -and $headerLine -and -not $separatorLine) {
                 $separatorLine = $line
                 $inData = $true
                 continue
             }
-            # Detect footer (upgrade count or other summary)
             elseif ($line -match '^\d+\s+(package|upgrade|installed)' -or $line -match 'The following packages') {
                 $inData = $false
-                $footerLines += $line
             }
-            # Data lines
             elseif ($inData) {
                 $dataLines += $line
             }
-            # Other lines (pre-header or post-footer)
-            else {
-                $footerLines += $line
+        }
+
+        # Parse into structured objects
+        $wingetPackages = @()
+        if ($headerLine) {
+            $namePos = $headerLine.IndexOf("Name")
+            $idPos = $headerLine.IndexOf("Id")
+            $versionPos = $headerLine.IndexOf("Version")
+
+            foreach ($line in $dataLines) {
+                try {
+                    $packageName = if ($idPos -gt $namePos) {
+                        $line.Substring($namePos, $idPos - $namePos).Trim()
+                    } else { "" }
+
+                    $packageId = if ($versionPos -gt $idPos) {
+                        $line.Substring($idPos, $versionPos - $idPos).Trim()
+                    } else { "" }
+
+                    $sourcePos = $headerLine.IndexOf("Source")
+                    $versionEndPos = if ($sourcePos -gt $versionPos) { $sourcePos } else { $line.Length }
+                    $packageVersion = if ($versionEndPos -gt $versionPos -and $versionPos -lt $line.Length) {
+                        $line.Substring($versionPos, [Math]::Min($versionEndPos - $versionPos, $line.Length - $versionPos)).Trim()
+                    } else { "" }
+
+                    if ($packageId -ne "") {
+                        $wingetPackages += @{
+                            Manager = "winget"
+                            Name = $packageId
+                            DisplayName = $packageName
+                            Version = $packageVersion
+                            DisplayText = "$packageName - $packageId ($packageVersion)"
+                        }
+                    }
+                } catch {
+                    continue
+                }
             }
         }
 
-        # Display header
-        if ($headerLine) {
-            Write-Host $headerLine
-        }
-        if ($separatorLine) {
-            Write-Host $separatorLine
-        }
+        if ($wingetPackages.Count -eq 0) {
+            Write-Host "  No winget packages found" -ForegroundColor Gray
+        } else {
+            Write-Host "  Found $($wingetPackages.Count) package(s)" -ForegroundColor Cyan
 
-        # Sort data lines alphabetically by package name (first column)
-        $sortedDataLines = $dataLines | Sort-Object
+            $batchSize = 20
+            $allSelections = @()
+            $allSelectionsRef = [ref]$allSelections
 
-        # Display sorted data
-        foreach ($line in $sortedDataLines) {
-            Write-Host $line
-        }
+            if ($wingetPackages.Count -gt $batchSize) {
+                $startIndex = 0
+                $batchNumber = 1
+                $continueSelecting = $true
 
-        # Display footer
-        foreach ($line in $footerLines) {
-            Write-Host $line
+                while ($continueSelecting -and $startIndex -lt $wingetPackages.Count) {
+                    $endIndex = [Math]::Min($startIndex + $batchSize, $wingetPackages.Count)
+                    $currentBatch = $wingetPackages[$startIndex..($endIndex - 1)]
+
+                    $result = Show-InlineBatchSelection `
+                        -CurrentBatch $currentBatch `
+                        -AllSelections $allSelectionsRef `
+                        -Title "WINGET PACKAGES (BATCH $batchNumber)" `
+                        -BatchNumber $batchNumber `
+                        -TotalShown $endIndex `
+                        -TotalAvailable $wingetPackages.Count
+
+                    if ($result.Cancelled) {
+                        $continueSelecting = $false
+                    } elseif (-not $result.FetchMore) {
+                        $continueSelecting = $false
+                    }
+
+                    $startIndex = $endIndex
+                    $batchNumber++
+                }
+            } else {
+                $selectedPackages = Show-CheckboxSelection -Items $wingetPackages -Title "SELECT WINGET PACKAGES TO UNINSTALL"
+                if ($selectedPackages) { $allSelections = $selectedPackages }
+            }
+
+            if ($allSelections.Count -gt 0) {
+                $allPackagesToUninstall += $allSelections
+                Write-Host "`n  ✅ Added $($allSelections.Count) winget package(s) to uninstall queue" -ForegroundColor Green
+            }
         }
     } catch {
         Write-Host "  ⚠️  winget not found" -ForegroundColor Red
+    }
+
+    # Process uninstallations
+    if ($allPackagesToUninstall.Count -gt 0) {
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Red
+        Write-Host "║  ⚠️  WARNING: PACKAGES TO UNINSTALL         ║" -ForegroundColor Red
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Red
+
+        $byManager = $allPackagesToUninstall | Group-Object Manager
+        Write-Host "Total: $($allPackagesToUninstall.Count) package(s) selected for removal`n" -ForegroundColor White
+
+        foreach ($group in $byManager) {
+            $managerName = $group.Name.ToUpper()
+            Write-Host "  $managerName ($($group.Count) package(s)):" -ForegroundColor Yellow
+            foreach ($pkg in $group.Group) {
+                Write-Host "    • $($pkg.Name) ($($pkg.Version))" -ForegroundColor White
+            }
+            Write-Host ""
+        }
+
+        Write-Host "⚠️  This action CANNOT be undone!" -ForegroundColor Red
+        Write-Host ""
+
+        # First confirmation
+        Write-Host "Are you sure you want to uninstall these packages? (y/N): " -ForegroundColor Yellow -NoNewline
+        $confirm1 = Read-Host
+        if ($confirm1.ToLower() -ne "y") {
+            Write-Host "`nUninstallation cancelled." -ForegroundColor Cyan
+            return
+        }
+
+        # Second confirmation - type UNINSTALL
+        Write-Host ""
+        Write-Host "Type 'UNINSTALL' to confirm: " -ForegroundColor Red -NoNewline
+        $confirm2 = Read-Host
+        if ($confirm2 -ne "UNINSTALL") {
+            Write-Host "`nUninstallation cancelled." -ForegroundColor Cyan
+            return
+        }
+
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Red
+        Write-Host "║  UNINSTALLING PACKAGES                     ║" -ForegroundColor Red
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Red
+
+        $results = @{ Uninstalled = 0; Failed = 0; Errors = @() }
+
+        foreach ($pkg in $allPackagesToUninstall) {
+            Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
+            try {
+                $output = switch ($pkg.Manager) {
+                    "scoop" { scoop uninstall $pkg.Name 2>&1 }
+                    "npm" { npm uninstall -g $pkg.Name 2>&1 }
+                    "pip" { pip uninstall -y $pkg.Name 2>&1 }
+                    "winget" { winget uninstall --id $pkg.Name --exact --silent 2>&1 }
+                }
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host " ✅" -ForegroundColor Green
+                    $results.Uninstalled++
+                } else {
+                    Write-Host " ❌" -ForegroundColor Red
+                    $results.Failed++
+                    $results.Errors += "$($pkg.Manager): $($pkg.Name) - $output"
+                }
+            } catch {
+                Write-Host " ❌" -ForegroundColor Red
+                $results.Failed++
+                $results.Errors += "$($pkg.Manager): $($pkg.Name) - $_"
+            }
+        }
+
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║  COMPLETE                                  ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+
+        Write-Host "  ✅ Successfully uninstalled: $($results.Uninstalled)" -ForegroundColor Green
+        if ($results.Failed -gt 0) {
+            Write-Host "  ❌ Failed: $($results.Failed)" -ForegroundColor Red
+            Write-Host "`nErrors:" -ForegroundColor Red
+            foreach ($errorMsg in $results.Errors) {
+                Write-Host "  • $errorMsg" -ForegroundColor Gray
+            }
+        }
+    } else {
+        Write-Host "`nNo packages selected for uninstallation." -ForegroundColor Gray
     }
 }
 
@@ -1715,33 +2005,94 @@ function Search-Packages {
     Write-Host ""
     try {
         if ($searchInstalled) {
-            # Search installed packages only
+            # Search installed packages only - with uninstall selection
             $scoopList = scoop list 2>&1 | Out-String
             $allLines = $scoopList -split "`n"
 
-            # Separate header/footer from data
-            $headerLines = @()
-            $dataLines = @()
+            # Parse into structured objects for checkbox selection
+            $scoopInstalledResults = @()
             $inData = $false
 
             foreach ($line in $allLines) {
                 if ($line -match 'Name.*Version.*Source') {
-                    $headerLines += $line
                     $inData = $true
-                } elseif ($line -match '^-+') {
-                    $headerLines += $line
-                } elseif ($inData -and $line.Trim().Length -gt 0 -and $line -match $searchTerm) {
-                    $dataLines += $line
+                    continue
+                }
+                if ($line -match '^-+') {
+                    continue
+                }
+                if ($inData -and $line.Trim().Length -gt 0 -and $line -match $searchTerm) {
+                    # Parse: Name Version Source Updated
+                    $parts = $line -split '\s+' | Where-Object { $_.Trim() -ne '' }
+                    if ($parts.Count -ge 2) {
+                        $pkgName = $parts[0]
+                        $pkgVersion = $parts[1]
+                        $pkgSource = if ($parts.Count -ge 3) { $parts[2] } else { "" }
+
+                        $scoopInstalledResults += @{
+                            Manager = "scoop"
+                            Name = $pkgName
+                            Version = $pkgVersion
+                            Source = $pkgSource
+                            DisplayText = "$pkgName - $pkgVersion ($pkgSource)"
+                        }
+                    }
                 }
             }
 
-            if ($dataLines.Count -eq 0) {
+            if ($scoopInstalledResults.Count -eq 0) {
                 Write-Host "  No matches found" -ForegroundColor Gray
             } else {
-                # Display header
-                $headerLines | ForEach-Object { Write-Host $_ }
-                # Display sorted data
-                $dataLines | Sort-Object | ForEach-Object { Write-Host $_ }
+                Write-Host "  Found $($scoopInstalledResults.Count) installed package(s) matching '$searchTerm'" -ForegroundColor Cyan
+                Write-Host "  Select packages to uninstall..." -ForegroundColor Gray
+                Write-Host ""
+
+                # Use pagination for large result sets
+                $batchSize = 20
+                $allSelections = @()
+                $allSelectionsRef = [ref]$allSelections
+
+                if ($scoopInstalledResults.Count -gt $batchSize) {
+                    $startIndex = 0
+                    $batchNumber = 1
+                    $continueSelecting = $true
+
+                    while ($continueSelecting -and $startIndex -lt $scoopInstalledResults.Count) {
+                        $endIndex = [Math]::Min($startIndex + $batchSize, $scoopInstalledResults.Count)
+                        $currentBatch = $scoopInstalledResults[$startIndex..($endIndex - 1)]
+
+                        $result = Show-InlineBatchSelection `
+                            -CurrentBatch $currentBatch `
+                            -AllSelections $allSelectionsRef `
+                            -Title "SCOOP PACKAGES TO UNINSTALL (BATCH $batchNumber)" `
+                            -BatchNumber $batchNumber `
+                            -TotalShown $endIndex `
+                            -TotalAvailable $scoopInstalledResults.Count
+
+                        if ($result.Cancelled) {
+                            $continueSelecting = $false
+                            $allSelections = @()  # Clear selections on cancel
+                        } elseif (-not $result.FetchMore) {
+                            $continueSelecting = $false
+                        }
+
+                        $startIndex = $endIndex
+                        $batchNumber++
+                    }
+                } else {
+                    $selectedPackages = Show-CheckboxSelection -Items $scoopInstalledResults -Title "SELECT SCOOP PACKAGES TO UNINSTALL"
+                    if ($selectedPackages) { $allSelections = $selectedPackages }
+                }
+
+                if ($allSelections.Count -gt 0) {
+                    foreach ($pkg in $allSelections) {
+                        $pkg.Action = "uninstall"
+                    }
+                    $script:AllPackageSelections += $allSelections
+                    Write-Host "`n✅ Added $($allSelections.Count) Scoop package(s) to uninstall queue" -ForegroundColor Green
+                } else {
+                    Write-Host "`nNo Scoop packages selected." -ForegroundColor Yellow
+                }
             }
         } else {
             # Search globally available packages
@@ -1860,15 +2211,91 @@ function Search-Packages {
     Write-Host ""
     try {
         if ($searchInstalled) {
-            # Search installed npm packages
-            $npmList = npm list -g --depth=0 2>&1 | Out-String
-            $matchedLines = $npmList -split "`n" | Where-Object { $_ -match $searchTerm }
+            # Search installed npm packages - with uninstall selection
+            $npmList = npm list -g --depth=0 --json 2>&1 | Out-String
+            $npmInstalledResults = @()
 
-            if ($matchedLines.Count -eq 0) {
+            try {
+                $npmData = $npmList | ConvertFrom-Json
+                if ($npmData.dependencies) {
+                    foreach ($pkg in $npmData.dependencies.PSObject.Properties) {
+                        if ($pkg.Name -match $searchTerm) {
+                            $npmInstalledResults += @{
+                                Manager = "npm"
+                                Name = $pkg.Name
+                                Version = $pkg.Value.version
+                                DisplayText = "$($pkg.Name) - $($pkg.Value.version)"
+                            }
+                        }
+                    }
+                }
+            } catch {
+                # Fallback to text parsing if JSON fails
+                $matchedLines = $npmList -split "`n" | Where-Object { $_ -match $searchTerm -and $_ -match '@' }
+                foreach ($line in $matchedLines) {
+                    if ($line -match '[\+\`]\-\-\s*(@?[^@]+)@(.+)$') {
+                        $npmInstalledResults += @{
+                            Manager = "npm"
+                            Name = $matches[1].Trim()
+                            Version = $matches[2].Trim()
+                            DisplayText = "$($matches[1].Trim()) - $($matches[2].Trim())"
+                        }
+                    }
+                }
+            }
+
+            if ($npmInstalledResults.Count -eq 0) {
                 Write-Host "  No matches found" -ForegroundColor Gray
             } else {
-                foreach ($line in $matchedLines) {
-                    Write-Host $line
+                Write-Host "  Found $($npmInstalledResults.Count) installed package(s) matching '$searchTerm'" -ForegroundColor Cyan
+                Write-Host "  Select packages to uninstall..." -ForegroundColor Gray
+                Write-Host ""
+
+                # Use pagination for large result sets
+                $batchSize = 20
+                $allSelections = @()
+                $allSelectionsRef = [ref]$allSelections
+
+                if ($npmInstalledResults.Count -gt $batchSize) {
+                    $startIndex = 0
+                    $batchNumber = 1
+                    $continueSelecting = $true
+
+                    while ($continueSelecting -and $startIndex -lt $npmInstalledResults.Count) {
+                        $endIndex = [Math]::Min($startIndex + $batchSize, $npmInstalledResults.Count)
+                        $currentBatch = $npmInstalledResults[$startIndex..($endIndex - 1)]
+
+                        $result = Show-InlineBatchSelection `
+                            -CurrentBatch $currentBatch `
+                            -AllSelections $allSelectionsRef `
+                            -Title "NPM PACKAGES TO UNINSTALL (BATCH $batchNumber)" `
+                            -BatchNumber $batchNumber `
+                            -TotalShown $endIndex `
+                            -TotalAvailable $npmInstalledResults.Count
+
+                        if ($result.Cancelled) {
+                            $continueSelecting = $false
+                            $allSelections = @()
+                        } elseif (-not $result.FetchMore) {
+                            $continueSelecting = $false
+                        }
+
+                        $startIndex = $endIndex
+                        $batchNumber++
+                    }
+                } else {
+                    $selectedPackages = Show-CheckboxSelection -Items $npmInstalledResults -Title "SELECT NPM PACKAGES TO UNINSTALL"
+                    if ($selectedPackages) { $allSelections = $selectedPackages }
+                }
+
+                if ($allSelections.Count -gt 0) {
+                    foreach ($pkg in $allSelections) {
+                        $pkg.Action = "uninstall"
+                    }
+                    $script:AllPackageSelections += $allSelections
+                    Write-Host "`n✅ Added $($allSelections.Count) npm package(s) to uninstall queue" -ForegroundColor Green
+                } else {
+                    Write-Host "`nNo npm packages selected." -ForegroundColor Yellow
                 }
             }
         } else {
@@ -2151,27 +2578,87 @@ function Search-Packages {
             Write-Host "  ⚠️  Python not found" -ForegroundColor Red
         } else {
             if ($searchInstalled) {
-                # Search installed pip packages
+                # Search installed pip packages - with uninstall selection
                 $pipList = pip list 2>&1 | Out-String
                 $pipLines = $pipList -split "`n"
-                $matchedLines = @()
-                $headerLines = @()
+                $pipInstalledResults = @()
+                $inData = $false
 
                 foreach ($line in $pipLines) {
-                    if ($line -match '^Package\s+Version' -or $line -match '^-+\s+-+') {
-                        $headerLines += $line
-                    } elseif ($line -match $searchTerm -and $line.Trim().Length -gt 0) {
-                        $matchedLines += $line
+                    if ($line -match '^Package\s+Version') {
+                        $inData = $true
+                        continue
+                    }
+                    if ($line -match '^-+\s+-+') {
+                        continue
+                    }
+                    if ($inData -and $line -match $searchTerm -and $line.Trim().Length -gt 0) {
+                        # Parse: Package Version
+                        $parts = $line -split '\s+' | Where-Object { $_.Trim() -ne '' }
+                        if ($parts.Count -ge 2) {
+                            $pipInstalledResults += @{
+                                Manager = "pip"
+                                Name = $parts[0]
+                                Version = $parts[1]
+                                DisplayText = "$($parts[0]) - $($parts[1])"
+                            }
+                        }
                     }
                 }
 
-                if ($matchedLines.Count -eq 0) {
+                if ($pipInstalledResults.Count -eq 0) {
                     Write-Host "  No matches found" -ForegroundColor Gray
                 } else {
-                    # Show header
-                    $headerLines | ForEach-Object { Write-Host $_ }
-                    # Show matches
-                    $matchedLines | Sort-Object | ForEach-Object { Write-Host $_ }
+                    Write-Host "  Found $($pipInstalledResults.Count) installed package(s) matching '$searchTerm'" -ForegroundColor Cyan
+                    Write-Host "  Select packages to uninstall..." -ForegroundColor Gray
+                    Write-Host ""
+
+                    # Use pagination for large result sets
+                    $batchSize = 20
+                    $allSelections = @()
+                    $allSelectionsRef = [ref]$allSelections
+
+                    if ($pipInstalledResults.Count -gt $batchSize) {
+                        $startIndex = 0
+                        $batchNumber = 1
+                        $continueSelecting = $true
+
+                        while ($continueSelecting -and $startIndex -lt $pipInstalledResults.Count) {
+                            $endIndex = [Math]::Min($startIndex + $batchSize, $pipInstalledResults.Count)
+                            $currentBatch = $pipInstalledResults[$startIndex..($endIndex - 1)]
+
+                            $result = Show-InlineBatchSelection `
+                                -CurrentBatch $currentBatch `
+                                -AllSelections $allSelectionsRef `
+                                -Title "PIP PACKAGES TO UNINSTALL (BATCH $batchNumber)" `
+                                -BatchNumber $batchNumber `
+                                -TotalShown $endIndex `
+                                -TotalAvailable $pipInstalledResults.Count
+
+                            if ($result.Cancelled) {
+                                $continueSelecting = $false
+                                $allSelections = @()
+                            } elseif (-not $result.FetchMore) {
+                                $continueSelecting = $false
+                            }
+
+                            $startIndex = $endIndex
+                            $batchNumber++
+                        }
+                    } else {
+                        $selectedPackages = Show-CheckboxSelection -Items $pipInstalledResults -Title "SELECT PIP PACKAGES TO UNINSTALL"
+                        if ($selectedPackages) { $allSelections = $selectedPackages }
+                    }
+
+                    if ($allSelections.Count -gt 0) {
+                        foreach ($pkg in $allSelections) {
+                            $pkg.Action = "uninstall"
+                        }
+                        $script:AllPackageSelections += $allSelections
+                        Write-Host "`n✅ Added $($allSelections.Count) pip package(s) to uninstall queue" -ForegroundColor Green
+                    } else {
+                        Write-Host "`nNo pip packages selected." -ForegroundColor Yellow
+                    }
                 }
             } else {
                 # Use PyPI JSON API to search (pip search was disabled in 2021)
@@ -2491,14 +2978,65 @@ function Search-Packages {
             }
 
             if ($searchInstalled) {
-                # Just display results for installed search
-                if ($headerLine) { Write-Host $headerLine }
-                if ($separatorLine) { Write-Host $separatorLine }
-                foreach ($line in $sortedDataLines) {
-                    Write-Host $line
-                }
-                foreach ($line in $footerLines) {
-                    Write-Host $line
+                # Installed search - with uninstall selection and pagination
+                if ($wingetSearchResults.Count -eq 0) {
+                    Write-Host "  No matches found" -ForegroundColor Gray
+                } else {
+                    Write-Host "  Found $($wingetSearchResults.Count) installed package(s) matching '$searchTerm'" -ForegroundColor Cyan
+                    Write-Host "  Select packages to uninstall..." -ForegroundColor Gray
+                    Write-Host ""
+
+                    # Use pagination for large result sets (>20 items)
+                    $batchSize = 20
+                    $allSelections = @()
+                    $allSelectionsRef = [ref]$allSelections
+
+                    if ($wingetSearchResults.Count -gt $batchSize) {
+                        $startIndex = 0
+                        $batchNumber = 1
+                        $continueSelecting = $true
+
+                        while ($continueSelecting -and $startIndex -lt $wingetSearchResults.Count) {
+                            $endIndex = [Math]::Min($startIndex + $batchSize, $wingetSearchResults.Count)
+                            $currentBatch = $wingetSearchResults[$startIndex..($endIndex - 1)]
+
+                            if ($currentBatch.Count -eq 0) { break }
+
+                            $result = Show-InlineBatchSelection `
+                                -CurrentBatch $currentBatch `
+                                -AllSelections $allSelectionsRef `
+                                -Title "SELECT WINGET PACKAGES TO UNINSTALL (BATCH $batchNumber)" `
+                                -BatchNumber $batchNumber `
+                                -TotalShown $endIndex `
+                                -TotalAvailable $wingetSearchResults.Count
+
+                            if ($result.Cancelled) {
+                                $continueSelecting = $false
+                                $allSelections = @()  # Clear selections on cancel
+                            } elseif (-not $result.FetchMore) {
+                                $continueSelecting = $false
+                            }
+
+                            $startIndex = $endIndex
+                            $batchNumber++
+                        }
+                    } else {
+                        # Small list - use simple checkbox selection
+                        $selectedPackages = Show-CheckboxSelection -Items $wingetSearchResults -Title "SELECT WINGET PACKAGES TO UNINSTALL"
+                        if ($selectedPackages) {
+                            $allSelections = $selectedPackages
+                        }
+                    }
+
+                    if ($allSelections -and $allSelections.Count -gt 0) {
+                        foreach ($pkg in $allSelections) {
+                            $pkg.Action = "uninstall"
+                        }
+                        $script:AllPackageSelections += $allSelections
+                        Write-Host "`n✅ Added $($allSelections.Count) winget package(s) to uninstall queue" -ForegroundColor Green
+                    } elseif ($null -eq $allSelections -or $allSelections.Count -eq 0) {
+                        Write-Host "`nNo winget packages selected." -ForegroundColor Yellow
+                    }
                 }
             } else {
                 # Display with highlighting, then offer selection with pagination
@@ -2578,172 +3116,349 @@ function Search-Packages {
     }
 
     # ═══════════════════════════════════════════════════════════════
-    # INSTALLATION SUMMARY & UNIFIED INSTALLATION
+    # PACKAGE ACTION SUMMARY & UNIFIED EXECUTION
     # ═══════════════════════════════════════════════════════════════
 
     Write-Host ""
 
     # Check if any packages were selected across all package managers
     if ($script:AllPackageSelections.Count -eq 0) {
-        Write-Host "No packages selected for installation." -ForegroundColor Gray
+        Write-Host "No packages selected." -ForegroundColor Gray
         return
     }
 
-    # Display installation summary
-    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║  INSTALLATION SUMMARY                      ║" -ForegroundColor Cyan
-    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+    # Separate packages by action
+    $packagesToInstall = @($script:AllPackageSelections | Where-Object { $_.Action -ne "uninstall" })
+    $packagesToUninstall = @($script:AllPackageSelections | Where-Object { $_.Action -eq "uninstall" })
 
-    # Group selections by package manager
-    $byManager = $script:AllPackageSelections | Group-Object Manager
+    # Display summary
+    if ($packagesToInstall.Count -gt 0) {
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║  PACKAGES TO INSTALL                       ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
 
-    Write-Host "Total: $($script:AllPackageSelections.Count) package(s) selected`n" -ForegroundColor White
+        $byManager = $packagesToInstall | Group-Object Manager
+        Write-Host "Total: $($packagesToInstall.Count) package(s) to install`n" -ForegroundColor White
 
-    foreach ($group in $byManager) {
-        $managerName = $group.Name.ToUpper()
-        Write-Host "  $managerName ($($group.Count) package(s)):" -ForegroundColor Yellow
-        foreach ($pkg in $group.Group) {
-            if ($pkg.Version) {
-                Write-Host "    • $($pkg.Name) ($($pkg.Version))" -ForegroundColor White
-            } else {
-                Write-Host "    • $($pkg.Name)" -ForegroundColor White
+        foreach ($group in $byManager) {
+            $managerName = $group.Name.ToUpper()
+            Write-Host "  $managerName ($($group.Count) package(s)):" -ForegroundColor Yellow
+            foreach ($pkg in $group.Group) {
+                if ($pkg.Version) {
+                    Write-Host "    • $($pkg.Name) ($($pkg.Version))" -ForegroundColor White
+                } else {
+                    Write-Host "    • $($pkg.Name)" -ForegroundColor White
+                }
             }
+            Write-Host ""
+        }
+    }
+
+    if ($packagesToUninstall.Count -gt 0) {
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Red
+        Write-Host "║  PACKAGES TO UNINSTALL                     ║" -ForegroundColor Red
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Red
+
+        $byManager = $packagesToUninstall | Group-Object Manager
+        Write-Host "Total: $($packagesToUninstall.Count) package(s) to uninstall`n" -ForegroundColor White
+
+        foreach ($group in $byManager) {
+            $managerName = $group.Name.ToUpper()
+            Write-Host "  $managerName ($($group.Count) package(s)):" -ForegroundColor Yellow
+            foreach ($pkg in $group.Group) {
+                if ($pkg.Version) {
+                    Write-Host "    • $($pkg.Name) ($($pkg.Version))" -ForegroundColor White
+                } else {
+                    Write-Host "    • $($pkg.Name)" -ForegroundColor White
+                }
+            }
+            Write-Host ""
+        }
+    }
+
+    # Confirm action - with extra confirmation for uninstalls
+    if ($packagesToUninstall.Count -gt 0) {
+        # Warning banner for uninstalls
+        Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Red
+        Write-Host "║                        ⚠️  WARNING ⚠️                           ║" -ForegroundColor Red
+        Write-Host "║  You are about to UNINSTALL $($packagesToUninstall.Count.ToString().PadRight(3)) package(s).                       ║" -ForegroundColor Red
+        Write-Host "║  This action CANNOT be undone!                                 ║" -ForegroundColor Red
+        Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Red
+        Write-Host ""
+
+        # First confirmation
+        if ($packagesToInstall.Count -gt 0) {
+            Write-Host "Are you sure you want to install $($packagesToInstall.Count) AND uninstall $($packagesToUninstall.Count) package(s)? (y/N): " -ForegroundColor Yellow -NoNewline
+        } else {
+            Write-Host "Are you sure you want to uninstall $($packagesToUninstall.Count) package(s)? (y/N): " -ForegroundColor Yellow -NoNewline
+        }
+        $confirm1 = Read-Host
+        if ($confirm1.ToLower() -ne "y") {
+            Write-Host "`nCancelled." -ForegroundColor Cyan
+            return
+        }
+
+        # Second confirmation - type UNINSTALL
+        Write-Host ""
+        Write-Host "Type 'UNINSTALL' to confirm: " -ForegroundColor Red -NoNewline
+        $confirm2 = Read-Host
+        if ($confirm2 -ne "UNINSTALL") {
+            Write-Host "`nCancelled." -ForegroundColor Cyan
+            return
         }
         Write-Host ""
+    } else {
+        # Simple confirmation for install-only
+        Write-Host "Proceed with installation? (Y/n): " -ForegroundColor Cyan -NoNewline
+        $confirm = Read-Host
+        if ($confirm -match '^[Nn]') {
+            Write-Host "`nCancelled." -ForegroundColor Yellow
+            return
+        }
     }
 
-    # Confirm installation
-    Write-Host "Proceed with installation? (Y/n): " -ForegroundColor Cyan -NoNewline
-    $confirm = Read-Host
-    if ($confirm -match '^[Nn]') {
-        Write-Host "`nInstallation cancelled." -ForegroundColor Yellow
-        return
+    $results = @{
+        Installed = 0
+        Uninstalled = 0
+        Failed = 0
+        Errors = @()
     }
 
     # ═══════════════════════════════════════════════════════════════
     # UNIFIED INSTALLATION PHASE
     # ═══════════════════════════════════════════════════════════════
 
-    Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║  INSTALLING PACKAGES                       ║" -ForegroundColor Cyan
-    Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+    if ($packagesToInstall.Count -gt 0) {
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║  INSTALLING PACKAGES                       ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
 
-    $installResults = @{
-        Success = 0
-        Failed = 0
-        Errors = @()
+        # Install npm packages
+        $npmPackages = $packagesToInstall | Where-Object { $_.Manager -eq "npm" }
+        if ($npmPackages.Count -gt 0) {
+            Write-Host "Installing npm packages..." -ForegroundColor Cyan
+            foreach ($pkg in $npmPackages) {
+                Write-Host "  → $($pkg.Name) ($($pkg.Version))..." -ForegroundColor Yellow -NoNewline
+                try {
+                    $output = npm install -g "$($pkg.Name)@$($pkg.Version)" 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host " ✅" -ForegroundColor Green
+                        $results.Installed++
+                    } else {
+                        Write-Host " ❌" -ForegroundColor Red
+                        $results.Failed++
+                        $results.Errors += "npm install: $($pkg.Name) - $output"
+                    }
+                } catch {
+                    Write-Host " ❌" -ForegroundColor Red
+                    $results.Failed++
+                    $results.Errors += "npm install: $($pkg.Name) - $_"
+                }
+            }
+            Write-Host ""
+        }
+
+        # Install Scoop packages
+        $scoopPackages = $packagesToInstall | Where-Object { $_.Manager -eq "scoop" }
+        if ($scoopPackages.Count -gt 0) {
+            Write-Host "Installing Scoop packages..." -ForegroundColor Cyan
+            foreach ($pkg in $scoopPackages) {
+                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
+                try {
+                    $output = scoop install $pkg.Name 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host " ✅" -ForegroundColor Green
+                        $results.Installed++
+                    } else {
+                        Write-Host " ❌" -ForegroundColor Red
+                        $results.Failed++
+                        $results.Errors += "scoop install: $($pkg.Name) - $output"
+                    }
+                } catch {
+                    Write-Host " ❌" -ForegroundColor Red
+                    $results.Failed++
+                    $results.Errors += "scoop install: $($pkg.Name) - $_"
+                }
+            }
+            Write-Host ""
+        }
+
+        # Install pip packages
+        $pipPackages = $packagesToInstall | Where-Object { $_.Manager -eq "pip" }
+        if ($pipPackages.Count -gt 0) {
+            Write-Host "Installing pip packages..." -ForegroundColor Cyan
+            foreach ($pkg in $pipPackages) {
+                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
+                try {
+                    $output = pip install $pkg.Name 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host " ✅" -ForegroundColor Green
+                        $results.Installed++
+                    } else {
+                        Write-Host " ❌" -ForegroundColor Red
+                        $results.Failed++
+                        $results.Errors += "pip install: $($pkg.Name) - $output"
+                    }
+                } catch {
+                    Write-Host " ❌" -ForegroundColor Red
+                    $results.Failed++
+                    $results.Errors += "pip install: $($pkg.Name) - $_"
+                }
+            }
+            Write-Host ""
+        }
+
+        # Install winget packages
+        $wingetPackages = $packagesToInstall | Where-Object { $_.Manager -eq "winget" }
+        if ($wingetPackages.Count -gt 0) {
+            Write-Host "Installing winget packages..." -ForegroundColor Cyan
+            foreach ($pkg in $wingetPackages) {
+                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
+                try {
+                    $output = winget install --id $pkg.Name --exact --silent --accept-package-agreements --accept-source-agreements 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host " ✅" -ForegroundColor Green
+                        $results.Installed++
+                    } else {
+                        Write-Host " ❌" -ForegroundColor Red
+                        $results.Failed++
+                        $results.Errors += "winget install: $($pkg.Name) - $output"
+                    }
+                } catch {
+                    Write-Host " ❌" -ForegroundColor Red
+                    $results.Failed++
+                    $results.Errors += "winget install: $($pkg.Name) - $_"
+                }
+            }
+            Write-Host ""
+        }
     }
 
-    # Install npm packages
-    $npmPackages = $script:AllPackageSelections | Where-Object { $_.Manager -eq "npm" }
-    if ($npmPackages.Count -gt 0) {
-        Write-Host "Installing npm packages..." -ForegroundColor Cyan
-        foreach ($pkg in $npmPackages) {
-            Write-Host "  → $($pkg.Name) ($($pkg.Version))..." -ForegroundColor Yellow -NoNewline
-            try {
-                $output = npm install -g "$($pkg.Name)@$($pkg.Version)" 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host " ✅" -ForegroundColor Green
-                    $installResults.Success++
-                } else {
-                    Write-Host " ❌" -ForegroundColor Red
-                    $installResults.Failed++
-                    $installResults.Errors += "npm: $($pkg.Name) - $output"
-                }
-            } catch {
-                Write-Host " ❌" -ForegroundColor Red
-                $installResults.Failed++
-                $installResults.Errors += "npm: $($pkg.Name) - $_"
-            }
-        }
-        Write-Host ""
-    }
+    # ═══════════════════════════════════════════════════════════════
+    # UNIFIED UNINSTALLATION PHASE
+    # ═══════════════════════════════════════════════════════════════
 
-    # Install Scoop packages
-    $scoopPackages = $script:AllPackageSelections | Where-Object { $_.Manager -eq "scoop" }
-    if ($scoopPackages.Count -gt 0) {
-        Write-Host "Installing Scoop packages..." -ForegroundColor Cyan
-        foreach ($pkg in $scoopPackages) {
-            Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
-            try {
-                $output = scoop install $pkg.Name 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host " ✅" -ForegroundColor Green
-                    $installResults.Success++
-                } else {
-                    Write-Host " ❌" -ForegroundColor Red
-                    $installResults.Failed++
-                    $installResults.Errors += "scoop: $($pkg.Name) - $output"
-                }
-            } catch {
-                Write-Host " ❌" -ForegroundColor Red
-                $installResults.Failed++
-                $installResults.Errors += "scoop: $($pkg.Name) - $_"
-            }
-        }
-        Write-Host ""
-    }
+    if ($packagesToUninstall.Count -gt 0) {
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Red
+        Write-Host "║  UNINSTALLING PACKAGES                     ║" -ForegroundColor Red
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Red
 
-    # Install pip packages
-    $pipPackages = $script:AllPackageSelections | Where-Object { $_.Manager -eq "pip" }
-    if ($pipPackages.Count -gt 0) {
-        Write-Host "Installing pip packages..." -ForegroundColor Cyan
-        foreach ($pkg in $pipPackages) {
-            Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
-            try {
-                $output = pip install $pkg.Name 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host " ✅" -ForegroundColor Green
-                    $installResults.Success++
-                } else {
+        # Uninstall npm packages
+        $npmPackages = $packagesToUninstall | Where-Object { $_.Manager -eq "npm" }
+        if ($npmPackages.Count -gt 0) {
+            Write-Host "Uninstalling npm packages..." -ForegroundColor Cyan
+            foreach ($pkg in $npmPackages) {
+                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
+                try {
+                    $output = npm uninstall -g $pkg.Name 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host " ✅" -ForegroundColor Green
+                        $results.Uninstalled++
+                    } else {
+                        Write-Host " ❌" -ForegroundColor Red
+                        $results.Failed++
+                        $results.Errors += "npm uninstall: $($pkg.Name) - $output"
+                    }
+                } catch {
                     Write-Host " ❌" -ForegroundColor Red
-                    $installResults.Failed++
-                    $installResults.Errors += "pip: $($pkg.Name) - $output"
+                    $results.Failed++
+                    $results.Errors += "npm uninstall: $($pkg.Name) - $_"
                 }
-            } catch {
-                Write-Host " ❌" -ForegroundColor Red
-                $installResults.Failed++
-                $installResults.Errors += "pip: $($pkg.Name) - $_"
             }
+            Write-Host ""
         }
-        Write-Host ""
-    }
 
-    # Install winget packages
-    $wingetPackages = $script:AllPackageSelections | Where-Object { $_.Manager -eq "winget" }
-    if ($wingetPackages.Count -gt 0) {
-        Write-Host "Installing winget packages..." -ForegroundColor Cyan
-        foreach ($pkg in $wingetPackages) {
-            Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
-            try {
-                $output = winget install --id $pkg.Name --exact --silent --accept-package-agreements --accept-source-agreements 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host " ✅" -ForegroundColor Green
-                    $installResults.Success++
-                } else {
+        # Uninstall Scoop packages
+        $scoopPackages = $packagesToUninstall | Where-Object { $_.Manager -eq "scoop" }
+        if ($scoopPackages.Count -gt 0) {
+            Write-Host "Uninstalling Scoop packages..." -ForegroundColor Cyan
+            foreach ($pkg in $scoopPackages) {
+                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
+                try {
+                    $output = scoop uninstall $pkg.Name 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host " ✅" -ForegroundColor Green
+                        $results.Uninstalled++
+                    } else {
+                        Write-Host " ❌" -ForegroundColor Red
+                        $results.Failed++
+                        $results.Errors += "scoop uninstall: $($pkg.Name) - $output"
+                    }
+                } catch {
                     Write-Host " ❌" -ForegroundColor Red
-                    $installResults.Failed++
-                    $installResults.Errors += "winget: $($pkg.Name) - $output"
+                    $results.Failed++
+                    $results.Errors += "scoop uninstall: $($pkg.Name) - $_"
                 }
-            } catch {
-                Write-Host " ❌" -ForegroundColor Red
-                $installResults.Failed++
-                $installResults.Errors += "winget: $($pkg.Name) - $_"
             }
+            Write-Host ""
         }
-        Write-Host ""
+
+        # Uninstall pip packages
+        $pipPackages = $packagesToUninstall | Where-Object { $_.Manager -eq "pip" }
+        if ($pipPackages.Count -gt 0) {
+            Write-Host "Uninstalling pip packages..." -ForegroundColor Cyan
+            foreach ($pkg in $pipPackages) {
+                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
+                try {
+                    $output = pip uninstall -y $pkg.Name 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host " ✅" -ForegroundColor Green
+                        $results.Uninstalled++
+                    } else {
+                        Write-Host " ❌" -ForegroundColor Red
+                        $results.Failed++
+                        $results.Errors += "pip uninstall: $($pkg.Name) - $output"
+                    }
+                } catch {
+                    Write-Host " ❌" -ForegroundColor Red
+                    $results.Failed++
+                    $results.Errors += "pip uninstall: $($pkg.Name) - $_"
+                }
+            }
+            Write-Host ""
+        }
+
+        # Uninstall winget packages
+        $wingetPackages = $packagesToUninstall | Where-Object { $_.Manager -eq "winget" }
+        if ($wingetPackages.Count -gt 0) {
+            Write-Host "Uninstalling winget packages..." -ForegroundColor Cyan
+            foreach ($pkg in $wingetPackages) {
+                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
+                try {
+                    $output = winget uninstall --id $pkg.Name --exact --silent 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host " ✅" -ForegroundColor Green
+                        $results.Uninstalled++
+                    } else {
+                        Write-Host " ❌" -ForegroundColor Red
+                        $results.Failed++
+                        $results.Errors += "winget uninstall: $($pkg.Name) - $output"
+                    }
+                } catch {
+                    Write-Host " ❌" -ForegroundColor Red
+                    $results.Failed++
+                    $results.Errors += "winget uninstall: $($pkg.Name) - $_"
+                }
+            }
+            Write-Host ""
+        }
     }
 
     # Display final summary
     Write-Host "╔════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║  INSTALLATION COMPLETE                     ║" -ForegroundColor Cyan
+    Write-Host "║  COMPLETE                                  ║" -ForegroundColor Cyan
     Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
 
-    Write-Host "  ✅ Successfully installed: $($installResults.Success)" -ForegroundColor Green
-    if ($installResults.Failed -gt 0) {
-        Write-Host "  ❌ Failed: $($installResults.Failed)" -ForegroundColor Red
+    if ($results.Installed -gt 0) {
+        Write-Host "  ✅ Successfully installed: $($results.Installed)" -ForegroundColor Green
+    }
+    if ($results.Uninstalled -gt 0) {
+        Write-Host "  ✅ Successfully uninstalled: $($results.Uninstalled)" -ForegroundColor Green
+    }
+    if ($results.Failed -gt 0) {
+        Write-Host "  ❌ Failed: $($results.Failed)" -ForegroundColor Red
         Write-Host "`nErrors:" -ForegroundColor Red
-        foreach ($errorMsg in $installResults.Errors) {
+        foreach ($errorMsg in $results.Errors) {
             Write-Host "  • $errorMsg" -ForegroundColor Gray
         }
     }
@@ -4219,7 +4934,7 @@ function Show-DeprecatedBackupFiles {
     $excludedDirsInBackup = @()
 
     $scanScript = Join-Path $scriptDir "scan-excluded.py"
-    $scanResultFile = Join-Path $env:TEMP "backup-scan-result.json"
+    $scanResultFile = Join-Path $scriptDir "backup-scan-result.json"
     if (Test-Path $scanScript) {
         Write-Host "Scanning backup for items matching exclusion patterns..." -ForegroundColor Cyan
 
@@ -4399,8 +5114,8 @@ function Show-DeprecatedBackupFiles {
 
                     # Use Python delete script with scan result file
                     $deleteScript = Join-Path $scriptDir "delete-excluded.py"
-                    $scanResultFile = Join-Path $env:TEMP "backup-scan-result.json"
-                    $deleteResultFile = Join-Path $env:TEMP "backup-delete-result.json"
+                    $scanResultFile = Join-Path $scriptDir "backup-scan-result.json"
+                    $deleteResultFile = Join-Path $scriptDir "backup-delete-result.json"
 
                     if ((Test-Path $deleteScript) -and (Test-Path $scanResultFile)) {
                         try {
@@ -4627,7 +5342,7 @@ function Show-BackupDevMenu {
         (New-MenuAction "View Backup History" {
             Open-BackupHistoryLog
         }),
-        (New-MenuAction "Show Deprecated Files" {
+        (New-MenuAction "Scan Deprecated Files" {
             Show-DeprecatedBackupFiles
         }),
         (New-MenuAction "Manage Exclusions" {
