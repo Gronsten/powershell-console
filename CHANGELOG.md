@@ -20,6 +20,30 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.19.1 (2026-01-19)
+
+**Bug Fixes:**
+- **Package Manager: Winget uninstall with multiple versions** - Fixed error when uninstalling packages with multiple versions installed
+  - Added `--version` parameter to winget uninstall commands
+  - Resolves "Multiple versions of this package are installed" error
+  - Properly targets specific version when uninstalling (e.g., .NET Desktop Runtime)
+- **Package Manager: Warning box alignment** - Fixed misaligned border in uninstall warning banner
+  - Warning message now properly padded to fit within box borders
+  - Visual alignment corrected for all package counts
+
+**Changes:**
+- **Package Manager: Interactive winget operations** - Removed `--silent` and `--disable-interactivity` flags from winget commands
+  - Allows users to see installer progress and interact with prompts
+  - Prevents unexpected automatic system restarts
+  - Users can now review and control restart decisions
+
+**Code Quality:**
+- **Package Manager: Consolidated uninstall logic** - Refactored duplicate uninstall code into reusable helper function
+  - Created `Invoke-PackageUninstall` function to handle all package managers uniformly
+  - Eliminated ~100 lines of duplicate code across two functions
+  - Simplified maintenance - single source of truth for uninstall logic
+  - Uses efficient switch statement instead of separate loops per package manager
+
 ### v1.19.0 (2026-01-16)
 
 **New Features:**
