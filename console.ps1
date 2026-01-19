@@ -3187,9 +3187,9 @@ function Search-Packages {
     if ($packagesToUninstall.Count -gt 0) {
         # Warning banner for uninstalls
         Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Red
-        Write-Host "║                        ⚠️  WARNING ⚠️                           ║" -ForegroundColor Red
+        Write-Host "║                        ⚠️  WARNING ⚠️                          ║" -ForegroundColor Red
         $uninstallMsg = "  You are about to UNINSTALL $($packagesToUninstall.Count) package(s)."
-        Write-Host "║$($uninstallMsg.PadRight(65))║" -ForegroundColor Red
+        Write-Host "║$($uninstallMsg.PadRight(64))║" -ForegroundColor Red
         Write-Host "║  This action CANNOT be undone!                                 ║" -ForegroundColor Red
         Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Red
         Write-Host ""
