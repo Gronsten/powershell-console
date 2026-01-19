@@ -937,7 +937,7 @@ function Get-InstalledPackages {
                     "pip" { pip uninstall -y $pkg.Name 2>&1 }
                     "winget" {
                         # Include --version if available to handle multiple installed versions
-                        $uninstallArgs = @("uninstall", "--id", $pkg.Name, "--exact", "--silent")
+                        $uninstallArgs = @("uninstall", "--id", $pkg.Name, "--exact")
                         if ($pkg.Version) {
                             $uninstallArgs += @("--version", $pkg.Version)
                         }
@@ -3323,7 +3323,7 @@ function Search-Packages {
             foreach ($pkg in $wingetPackages) {
                 Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
                 try {
-                    $output = winget install --id $pkg.Name --exact --silent --accept-package-agreements --accept-source-agreements 2>&1
+                    $output = winget install --id $pkg.Name --exact --accept-package-agreements --accept-source-agreements 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         Write-Host " ✅" -ForegroundColor Green
                         $results.Installed++
@@ -3434,7 +3434,7 @@ function Search-Packages {
                 Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
                 try {
                     # Include --version if available to handle multiple installed versions
-                    $uninstallArgs = @("uninstall", "--id", $pkg.Name, "--exact", "--silent")
+                    $uninstallArgs = @("uninstall", "--id", $pkg.Name, "--exact")
                     if ($pkg.Version) {
                         $uninstallArgs += @("--version", $pkg.Version)
                     }

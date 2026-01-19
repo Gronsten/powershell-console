@@ -31,6 +31,12 @@ All notable changes to this project have been documented during development.
   - Warning message now properly padded to fit within box borders
   - Visual alignment corrected for all package counts
 
+**Changes:**
+- **Package Manager: Interactive winget operations** - Removed `--silent` and `--disable-interactivity` flags from winget commands
+  - Allows users to see installer progress and interact with prompts
+  - Prevents unexpected automatic system restarts
+  - Users can now review and control restart decisions
+
 ### v1.19.0 (2026-01-16)
 
 **New Features:**
