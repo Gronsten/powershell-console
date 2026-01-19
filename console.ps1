@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.19.0"
+$script:ConsoleVersion = "1.19.1"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -935,7 +935,14 @@ function Get-InstalledPackages {
                     "scoop" { scoop uninstall $pkg.Name 2>&1 }
                     "npm" { npm uninstall -g $pkg.Name 2>&1 }
                     "pip" { pip uninstall -y $pkg.Name 2>&1 }
-                    "winget" { winget uninstall --id $pkg.Name --exact --silent 2>&1 }
+                    "winget" {
+                        # Include --version if available to handle multiple installed versions
+                        $uninstallArgs = @("uninstall", "--id", $pkg.Name, "--exact", "--silent")
+                        if ($pkg.Version) {
+                            $uninstallArgs += @("--version", $pkg.Version)
+                        }
+                        & winget $uninstallArgs 2>&1
+                    }
                 }
                 if ($LASTEXITCODE -eq 0) {
                     Write-Host " ✅" -ForegroundColor Green
@@ -3181,7 +3188,8 @@ function Search-Packages {
         # Warning banner for uninstalls
         Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Red
         Write-Host "║                        ⚠️  WARNING ⚠️                           ║" -ForegroundColor Red
-        Write-Host "║  You are about to UNINSTALL $($packagesToUninstall.Count.ToString().PadRight(3)) package(s).                       ║" -ForegroundColor Red
+        $uninstallMsg = "  You are about to UNINSTALL $($packagesToUninstall.Count) package(s)."
+        Write-Host "║$($uninstallMsg.PadRight(62))║" -ForegroundColor Red
         Write-Host "║  This action CANNOT be undone!                                 ║" -ForegroundColor Red
         Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Red
         Write-Host ""
@@ -3425,7 +3433,12 @@ function Search-Packages {
             foreach ($pkg in $wingetPackages) {
                 Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
                 try {
-                    $output = winget uninstall --id $pkg.Name --exact --silent 2>&1
+                    # Include --version if available to handle multiple installed versions
+                    $uninstallArgs = @("uninstall", "--id", $pkg.Name, "--exact", "--silent")
+                    if ($pkg.Version) {
+                        $uninstallArgs += @("--version", $pkg.Version)
+                    }
+                    $output = & winget $uninstallArgs 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         Write-Host " ✅" -ForegroundColor Green
                         $results.Uninstalled++
