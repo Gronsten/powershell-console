@@ -510,6 +510,56 @@ function Get-NpmInstallInfo {
     return $result
 }
 
+function Invoke-PackageUninstall {
+    <#
+    .SYNOPSIS
+    Uninstalls packages across multiple package managers.
+
+    .PARAMETER Packages
+    Array of package objects with Manager, Name, and Version properties.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [array]$Packages
+    )
+
+    $results = @{ Uninstalled = 0; Failed = 0; Errors = @() }
+
+    foreach ($pkg in $Packages) {
+        Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
+        try {
+            $output = switch ($pkg.Manager) {
+                "scoop" { scoop uninstall $pkg.Name 2>&1 }
+                "npm" { npm uninstall -g $pkg.Name 2>&1 }
+                "pip" { pip uninstall -y $pkg.Name 2>&1 }
+                "winget" {
+                    # Include --version if available to handle multiple installed versions
+                    $uninstallArgs = @("uninstall", "--id", $pkg.Name, "--exact")
+                    if ($pkg.Version) {
+                        $uninstallArgs += @("--version", $pkg.Version)
+                    }
+                    & winget $uninstallArgs 2>&1
+                }
+            }
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host " ✅" -ForegroundColor Green
+                $results.Uninstalled++
+            } else {
+                Write-Host " ❌" -ForegroundColor Red
+                $results.Failed++
+                $results.Errors += "$($pkg.Manager): $($pkg.Name) - $output"
+            }
+        } catch {
+            Write-Host " ❌" -ForegroundColor Red
+            $results.Failed++
+            $results.Errors += "$($pkg.Manager): $($pkg.Name) - $_"
+        }
+    }
+
+    return $results
+}
+
 function Get-InstalledPackages {
     [CmdletBinding()]
     param()
@@ -926,38 +976,7 @@ function Get-InstalledPackages {
         Write-Host "║  UNINSTALLING PACKAGES                     ║" -ForegroundColor Red
         Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Red
 
-        $results = @{ Uninstalled = 0; Failed = 0; Errors = @() }
-
-        foreach ($pkg in $allPackagesToUninstall) {
-            Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
-            try {
-                $output = switch ($pkg.Manager) {
-                    "scoop" { scoop uninstall $pkg.Name 2>&1 }
-                    "npm" { npm uninstall -g $pkg.Name 2>&1 }
-                    "pip" { pip uninstall -y $pkg.Name 2>&1 }
-                    "winget" {
-                        # Include --version if available to handle multiple installed versions
-                        $uninstallArgs = @("uninstall", "--id", $pkg.Name, "--exact")
-                        if ($pkg.Version) {
-                            $uninstallArgs += @("--version", $pkg.Version)
-                        }
-                        & winget $uninstallArgs 2>&1
-                    }
-                }
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host " ✅" -ForegroundColor Green
-                    $results.Uninstalled++
-                } else {
-                    Write-Host " ❌" -ForegroundColor Red
-                    $results.Failed++
-                    $results.Errors += "$($pkg.Manager): $($pkg.Name) - $output"
-                }
-            } catch {
-                Write-Host " ❌" -ForegroundColor Red
-                $results.Failed++
-                $results.Errors += "$($pkg.Manager): $($pkg.Name) - $_"
-            }
-        }
+        $results = Invoke-PackageUninstall -Packages $allPackagesToUninstall
 
         Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
         Write-Host "║  COMPLETE                                  ║" -ForegroundColor Cyan
@@ -3351,110 +3370,11 @@ function Search-Packages {
         Write-Host "║  UNINSTALLING PACKAGES                     ║" -ForegroundColor Red
         Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Red
 
-        # Uninstall npm packages
-        $npmPackages = $packagesToUninstall | Where-Object { $_.Manager -eq "npm" }
-        if ($npmPackages.Count -gt 0) {
-            Write-Host "Uninstalling npm packages..." -ForegroundColor Cyan
-            foreach ($pkg in $npmPackages) {
-                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
-                try {
-                    $output = npm uninstall -g $pkg.Name 2>&1
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host " ✅" -ForegroundColor Green
-                        $results.Uninstalled++
-                    } else {
-                        Write-Host " ❌" -ForegroundColor Red
-                        $results.Failed++
-                        $results.Errors += "npm uninstall: $($pkg.Name) - $output"
-                    }
-                } catch {
-                    Write-Host " ❌" -ForegroundColor Red
-                    $results.Failed++
-                    $results.Errors += "npm uninstall: $($pkg.Name) - $_"
-                }
-            }
-            Write-Host ""
-        }
-
-        # Uninstall Scoop packages
-        $scoopPackages = $packagesToUninstall | Where-Object { $_.Manager -eq "scoop" }
-        if ($scoopPackages.Count -gt 0) {
-            Write-Host "Uninstalling Scoop packages..." -ForegroundColor Cyan
-            foreach ($pkg in $scoopPackages) {
-                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
-                try {
-                    $output = scoop uninstall $pkg.Name 2>&1
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host " ✅" -ForegroundColor Green
-                        $results.Uninstalled++
-                    } else {
-                        Write-Host " ❌" -ForegroundColor Red
-                        $results.Failed++
-                        $results.Errors += "scoop uninstall: $($pkg.Name) - $output"
-                    }
-                } catch {
-                    Write-Host " ❌" -ForegroundColor Red
-                    $results.Failed++
-                    $results.Errors += "scoop uninstall: $($pkg.Name) - $_"
-                }
-            }
-            Write-Host ""
-        }
-
-        # Uninstall pip packages
-        $pipPackages = $packagesToUninstall | Where-Object { $_.Manager -eq "pip" }
-        if ($pipPackages.Count -gt 0) {
-            Write-Host "Uninstalling pip packages..." -ForegroundColor Cyan
-            foreach ($pkg in $pipPackages) {
-                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
-                try {
-                    $output = pip uninstall -y $pkg.Name 2>&1
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host " ✅" -ForegroundColor Green
-                        $results.Uninstalled++
-                    } else {
-                        Write-Host " ❌" -ForegroundColor Red
-                        $results.Failed++
-                        $results.Errors += "pip uninstall: $($pkg.Name) - $output"
-                    }
-                } catch {
-                    Write-Host " ❌" -ForegroundColor Red
-                    $results.Failed++
-                    $results.Errors += "pip uninstall: $($pkg.Name) - $_"
-                }
-            }
-            Write-Host ""
-        }
-
-        # Uninstall winget packages
-        $wingetPackages = $packagesToUninstall | Where-Object { $_.Manager -eq "winget" }
-        if ($wingetPackages.Count -gt 0) {
-            Write-Host "Uninstalling winget packages..." -ForegroundColor Cyan
-            foreach ($pkg in $wingetPackages) {
-                Write-Host "  → $($pkg.Name)..." -ForegroundColor Yellow -NoNewline
-                try {
-                    # Include --version if available to handle multiple installed versions
-                    $uninstallArgs = @("uninstall", "--id", $pkg.Name, "--exact")
-                    if ($pkg.Version) {
-                        $uninstallArgs += @("--version", $pkg.Version)
-                    }
-                    $output = & winget $uninstallArgs 2>&1
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host " ✅" -ForegroundColor Green
-                        $results.Uninstalled++
-                    } else {
-                        Write-Host " ❌" -ForegroundColor Red
-                        $results.Failed++
-                        $results.Errors += "winget uninstall: $($pkg.Name) - $output"
-                    }
-                } catch {
-                    Write-Host " ❌" -ForegroundColor Red
-                    $results.Failed++
-                    $results.Errors += "winget uninstall: $($pkg.Name) - $_"
-                }
-            }
-            Write-Host ""
-        }
+        # Uninstall packages using consolidated helper function
+        $uninstallResults = Invoke-PackageUninstall -Packages $packagesToUninstall
+        $results.Uninstalled += $uninstallResults.Uninstalled
+        $results.Failed += $uninstallResults.Failed
+        $results.Errors += $uninstallResults.Errors
     }
 
     # Display final summary

@@ -37,6 +37,13 @@ All notable changes to this project have been documented during development.
   - Prevents unexpected automatic system restarts
   - Users can now review and control restart decisions
 
+**Code Quality:**
+- **Package Manager: Consolidated uninstall logic** - Refactored duplicate uninstall code into reusable helper function
+  - Created `Invoke-PackageUninstall` function to handle all package managers uniformly
+  - Eliminated ~100 lines of duplicate code across two functions
+  - Simplified maintenance - single source of truth for uninstall logic
+  - Uses efficient switch statement instead of separate loops per package manager
+
 ### v1.19.0 (2026-01-16)
 
 **New Features:**
