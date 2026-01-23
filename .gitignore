@@ -29,6 +29,10 @@ logs/
 backup-log.txt
 temp_count_log.txt
 
+# Backup module temporary files
+modules/backup-dev/backup-scan-result.json
+modules/backup-dev/backup-delete-result.json
+
 # Windows system files
 Thumbs.db
 Desktop.ini

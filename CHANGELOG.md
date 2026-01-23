@@ -20,6 +20,39 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.20.0 (2026-01-22)
+
+**Bug Fixes:**
+- **Backup: Scan deprecated files running twice** - Fixed bug where scan had to be run twice to show both deprecated and excluded files
+  - Root cause: Python exclusion scan was failing silently due to suppressed stderr
+  - Added proper error handling and exit code checking for Python script
+  - Scan result JSON files now cleaned up properly between runs
+
+**New Features:**
+- **Backup: OneDrive sync pause/resume** - Automatically pauses OneDrive sync during backup deletions for faster performance
+  - Added `Suspend-OneDriveSync` function using `/shutdown` command
+  - Added `Resume-OneDriveSync` function using `runas /trustlevel:0x20000` to avoid admin elevation issues
+  - Added `Get-OneDrivePath` helper to detect OneDrive installation across personal/enterprise/32-bit locations
+  - Significantly speeds up deletion of large directories (especially `.git` folders with thousands of files)
+
+- **Backup: Improved deletion progress tracking** - Better progress indication for directory deletions
+  - Python script now counts files within directories before deletion
+  - Progress bar accurately reflects total items being deleted (files + subdirs)
+  - Shows breakdown: "Deleting X directories (Y subdirs, Z files) + N standalone files"
+
+- **Backup: Debug mode for deletion script** - Added `--debug` flag to `delete-excluded.py`
+  - Shows detailed output for each file/directory being processed
+  - Displays file attributes and deletion verification
+  - Helpful for troubleshooting locked files or permission issues
+
+**Code Quality:**
+- Removed backward compatibility code from `Get-ExclusionFlags` function
+- Standardized on unified config structure: `backupDev.exclusions.{directories,files}`
+
+**Config Changes (config.14):**
+- Added `backup-scan-result.json` and `backup-delete-result.json` to `backupDev.exclusions.files`
+- These temporary files are now automatically excluded from backups
+
 ### v1.19.1 (2026-01-19)
 
 **Bug Fixes:**

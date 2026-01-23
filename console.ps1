@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.19.1"
+$script:ConsoleVersion = "1.20.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -4598,6 +4598,97 @@ function Start-CodeCount {
     Start-CodeCount
 }
 
+# Helper function to get OneDrive executable path
+function Get-OneDrivePath {
+    # Try multiple possible OneDrive locations
+    $possiblePaths = @(
+        "$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe",           # Personal install
+        "${env:ProgramFiles}\Microsoft OneDrive\OneDrive.exe",          # System-wide install
+        "${env:ProgramFiles(x86)}\Microsoft OneDrive\OneDrive.exe"      # 32-bit install on 64-bit system
+    )
+
+    foreach ($path in $possiblePaths) {
+        if (Test-Path $path) {
+            return $path
+        }
+    }
+    return $null
+}
+
+# Helper function to pause OneDrive sync
+function Suspend-OneDriveSync {
+    <#
+    .SYNOPSIS
+    Shuts down OneDrive temporarily to pause sync
+
+    .DESCRIPTION
+    Uses OneDrive.exe /shutdown to stop OneDrive completely.
+    Returns $true if successful, $false otherwise.
+
+    .EXAMPLE
+    if (Suspend-OneDriveSync) {
+        # Do work that benefits from paused sync
+        Resume-OneDriveSync
+    }
+    #>
+
+    try {
+        $oneDrivePath = Get-OneDrivePath
+
+        if (-not $oneDrivePath) {
+            Write-Host "  ⚠️  OneDrive not found in any standard location" -ForegroundColor Yellow
+            return $false
+        }
+
+        # Shutdown OneDrive completely
+        & $oneDrivePath /shutdown
+        Start-Sleep -Milliseconds 500  # Brief pause to let it shut down
+
+        Write-Host "  ⏸️  OneDrive sync paused" -ForegroundColor Cyan
+        return $true
+    }
+    catch {
+        Write-Host "  ⚠️  Error pausing OneDrive: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+# Helper function to resume OneDrive sync
+function Resume-OneDriveSync {
+    <#
+    .SYNOPSIS
+    Resumes OneDrive sync after being shut down
+
+    .DESCRIPTION
+    Starts OneDrive.exe with /background flag to resume sync.
+    Returns $true if successful, $false otherwise.
+
+    .EXAMPLE
+    Resume-OneDriveSync
+    #>
+
+    try {
+        $oneDrivePath = Get-OneDrivePath
+
+        if (-not $oneDrivePath) {
+            Write-Host "  ⚠️  OneDrive not found in any standard location" -ForegroundColor Yellow
+            return $false
+        }
+
+        # Start OneDrive in background mode without elevation
+        # Use runas /trustlevel:0x20000 to launch without inheriting admin privileges
+        # This avoids the "OneDrive can't be run using full administrator rights" error
+        Start-Process "runas.exe" -ArgumentList "/trustlevel:0x20000 `"$oneDrivePath /background`"" -WindowStyle Hidden
+
+        Write-Host "  ▶️  OneDrive sync resumed" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "  ⚠️  Error resuming OneDrive: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
 # Helper function to get backup script path
 function Get-BackupScriptPath {
     # Use $PSScriptRoot to get the actual script directory (handles project renames automatically)
@@ -4868,12 +4959,34 @@ function Show-DeprecatedBackupFiles {
 
     $scanScript = Join-Path $scriptDir "scan-excluded.py"
     $scanResultFile = Join-Path $scriptDir "backup-scan-result.json"
+
+    # Clean up any stale scan result file from previous runs
+    if (Test-Path $scanResultFile) {
+        Remove-Item $scanResultFile -Force -ErrorAction SilentlyContinue
+    }
+
     if (Test-Path $scanScript) {
         Write-Host "Scanning backup for items matching exclusion patterns..." -ForegroundColor Cyan
 
         try {
             # Scan and save result to file (for delete script to use later)
-            $null = python "$scanScript" "$destination" "$configPath" --output "$scanResultFile" 2>&1
+            # Don't suppress stderr so we can see Python errors
+            $pythonOutput = python "$scanScript" "$destination" "$configPath" --output "$scanResultFile" 2>&1
+
+            # Check if command succeeded
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  Warning: Python scan failed with exit code $LASTEXITCODE" -ForegroundColor Yellow
+                if ($pythonOutput) {
+                    Write-Host "  Error output: $pythonOutput" -ForegroundColor Yellow
+                }
+                throw "Python scan-excluded.py failed"
+            }
+
+            # Verify the JSON file was created and is readable
+            if (-not (Test-Path $scanResultFile)) {
+                throw "Scan result file was not created at: $scanResultFile"
+            }
+
             $scanData = Get-Content $scanResultFile -Raw | ConvertFrom-Json
 
             if ($scanData.directories) {
@@ -4882,10 +4995,16 @@ function Show-DeprecatedBackupFiles {
             if ($scanData.files) {
                 $excludedInBackup = @($scanData.files)
             }
+
+            Write-Host "  Found $($excludedDirsInBackup.Count) excluded directories, $($excludedInBackup.Count) excluded files" -ForegroundColor Gray
         }
         catch {
             Write-Host "  Warning: Could not scan for excluded files: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "  Check that your config.json has the correct structure: backupDev.exclusions.{directories,files}" -ForegroundColor Yellow
         }
+    }
+    else {
+        Write-Host "  Warning: scan-excluded.py not found at: $scanScript" -ForegroundColor Yellow
     }
 
     $excludedFileCount = $excludedInBackup.Count
@@ -4910,7 +5029,7 @@ function Show-DeprecatedBackupFiles {
         Write-Host "    Directories: $extraDirCount" -ForegroundColor Gray
     }
     if ($excludedFileCount -gt 0 -or $excludedDirCount -gt 0) {
-        Write-Host "  Matching exclusion patterns:" -ForegroundColor Magenta
+        Write-Host "Matching exclusion patterns:" -ForegroundColor Magenta
         Write-Host "    Files: $excludedFileCount" -ForegroundColor Gray
         Write-Host "    Directories: $excludedDirCount" -ForegroundColor Gray
     }
@@ -5038,86 +5157,14 @@ function Show-DeprecatedBackupFiles {
                 Write-Host "Cleaning deprecated files..." -ForegroundColor Yellow
                 Write-Host ""
 
+                # Pause OneDrive sync for faster deletion
+                $oneDrivePaused = Suspend-OneDriveSync
+                Write-Host ""
+
                 $script:deletedDirs = 0
                 $script:deletedFiles = 0
 
-                # First, delete excluded items (files that exist in source but are now excluded)
-                if ($excludedDirsInBackup.Count -gt 0 -or $excludedInBackup.Count -gt 0) {
-                    Write-Host "Removing items matching exclusion patterns..." -ForegroundColor Cyan
-
-                    # Use Python delete script with scan result file
-                    $deleteScript = Join-Path $scriptDir "delete-excluded.py"
-                    $scanResultFile = Join-Path $scriptDir "backup-scan-result.json"
-                    $deleteResultFile = Join-Path $scriptDir "backup-delete-result.json"
-
-                    if ((Test-Path $deleteScript) -and (Test-Path $scanResultFile)) {
-                        try {
-                            # Run delete script directly - output streams to console in real-time
-                            # Use Start-Process with -Wait and -NoNewWindow for live progress display
-                            $null = Start-Process -FilePath "python" `
-                                -ArgumentList "`"$deleteScript`" `"$destination`" `"$scanResultFile`" --output `"$deleteResultFile`"" `
-                                -NoNewWindow -Wait -PassThru
-
-                            # Read result from output file
-                            if (Test-Path $deleteResultFile) {
-                                $deleteData = Get-Content $deleteResultFile -Raw | ConvertFrom-Json
-                                $script:deletedDirs = $deleteData.deleted_dirs
-                                $script:deletedFiles = $deleteData.deleted_files
-                                Remove-Item $deleteResultFile -Force -ErrorAction SilentlyContinue
-                            }
-
-                            # Clean up scan result file
-                            Remove-Item $scanResultFile -Force -ErrorAction SilentlyContinue
-                        } catch {
-                            Write-Host "  Warning: Python deletion failed ($_), using fallback method..." -ForegroundColor Yellow
-                            # Fall through to PowerShell fallback
-                            $useFallback = $true
-                        }
-                    } else {
-                        $useFallback = $true
-                    }
-
-                    # PowerShell fallback
-                    if ($useFallback) {
-                        $totalItems = $excludedDirsInBackup.Count + $excludedInBackup.Count
-                        $processed = 0
-
-                        foreach ($dir in $excludedDirsInBackup) {
-                            $fullPath = Join-Path $destination $dir
-                            if (Test-Path $fullPath) {
-                                try {
-                                    Remove-Item -Path $fullPath -Recurse -Force -ErrorAction Stop
-                                    $script:deletedDirs++
-                                } catch {
-                                    Write-Host "  Failed to delete: $dir" -ForegroundColor Red
-                                }
-                            }
-                            $processed++
-                            $pct = [math]::Floor(($processed / $totalItems) * 100)
-                            Write-Host "`r  Progress: $pct% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
-                        }
-
-                        foreach ($file in $excludedInBackup) {
-                            $fullPath = Join-Path $destination $file
-                            if (Test-Path $fullPath) {
-                                try {
-                                    Remove-Item -Path $fullPath -Force -ErrorAction Stop
-                                    $script:deletedFiles++
-                                } catch {
-                                    Write-Host "  Failed to delete: $file" -ForegroundColor Red
-                                }
-                            }
-                            $processed++
-                            $pct = [math]::Floor(($processed / $totalItems) * 100)
-                            Write-Host "`r  Progress: $pct% | Deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -NoNewline -ForegroundColor Yellow
-                        }
-                        Write-Host ""
-                    }
-
-                    Write-Host "  Removed $($script:deletedDirs) excluded dirs, $($script:deletedFiles) excluded files" -ForegroundColor Gray
-                }
-
-                # Then, use robocopy to clean up files deleted from source
+                # First, use robocopy to clean up files deleted from source
                 if ($extraFileCount -gt 0 -or $extraDirCount -gt 0) {
                     Write-Host "Removing items deleted from source..." -ForegroundColor Cyan
 
@@ -5208,6 +5255,128 @@ function Show-DeprecatedBackupFiles {
                     $script:deletedDirs += $robocopyDeletedDirs
                     $script:deletedFiles += $robocopyDeletedFiles
                 }
+
+                # Then, delete excluded items (files that exist in source but are now excluded)
+                if ($excludedDirsInBackup.Count -gt 0 -or $excludedInBackup.Count -gt 0) {
+                    Write-Host "Removing items matching exclusion patterns..." -ForegroundColor Cyan
+
+                    # Use Python delete script with scan result file
+                    $deleteScript = Join-Path $scriptDir "delete-excluded.py"
+                    $scanResultFile = Join-Path $scriptDir "backup-scan-result.json"
+                    $deleteResultFile = Join-Path $scriptDir "backup-delete-result.json"
+
+                    if ((Test-Path $deleteScript) -and (Test-Path $scanResultFile)) {
+                        try {
+                            # Run delete script directly - output streams to console in real-time
+                            # Use Start-Process with -Wait and -NoNewWindow for live progress display
+                            $null = Start-Process -FilePath "python" `
+                                -ArgumentList "`"$deleteScript`" `"$destination`" `"$scanResultFile`" --output `"$deleteResultFile`"" `
+                                -NoNewWindow -Wait -PassThru
+
+                            # Read result from output file
+                            if (Test-Path $deleteResultFile) {
+                                $deleteData = Get-Content $deleteResultFile -Raw | ConvertFrom-Json
+                                $excludedDeletedDirs = $deleteData.deleted_dirs
+                                $excludedDeletedFiles = $deleteData.deleted_files
+
+                                # Check for errors
+                                if ($deleteData.errors -and $deleteData.errors.Count -gt 0) {
+                                    $errorCount = $deleteData.errors.Count
+                                    Write-Host ""
+                                    Write-Host "  ⚠️  Warning: $errorCount items failed to delete" -ForegroundColor Yellow
+
+                                    # Show first 5 errors inline
+                                    $displayCount = [Math]::Min(5, $errorCount)
+                                    for ($i = 0; $i -lt $displayCount; $i++) {
+                                        Write-Host "    $($deleteData.errors[$i])" -ForegroundColor Gray
+                                    }
+
+                                    if ($errorCount -gt 5) {
+                                        Write-Host "    ... and $($errorCount - 5) more errors" -ForegroundColor DarkGray
+                                    }
+
+                                    # Save full error list to file for review
+                                    $errorLogPath = Join-Path $scriptDir "backup-deletion-errors.log"
+                                    $errorReport = @()
+                                    $errorReport += "Backup Deletion Errors"
+                                    $errorReport += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+                                    $errorReport += "Backup: $destination"
+                                    $errorReport += ""
+                                    $errorReport += "Total Errors: $errorCount"
+                                    $errorReport += "=" * 80
+                                    $errorReport += ""
+                                    foreach ($err in $deleteData.errors) {
+                                        $errorReport += $err
+                                    }
+                                    Set-Content -Path $errorLogPath -Value $errorReport
+                                    Write-Host "    Full error log saved to: $errorLogPath" -ForegroundColor Cyan
+                                    Write-Host ""
+                                }
+
+                                Remove-Item $deleteResultFile -Force -ErrorAction SilentlyContinue
+                            }
+
+                            # Clean up scan result file
+                            Remove-Item $scanResultFile -Force -ErrorAction SilentlyContinue
+                        } catch {
+                            Write-Host "  Warning: Python deletion failed ($_), using fallback method..." -ForegroundColor Yellow
+                            # Fall through to PowerShell fallback
+                            $useFallback = $true
+                        }
+                    } else {
+                        $useFallback = $true
+                    }
+
+                    # PowerShell fallback
+                    if ($useFallback) {
+                        $excludedDeletedDirs = 0
+                        $excludedDeletedFiles = 0
+                        $totalItems = $excludedDirsInBackup.Count + $excludedInBackup.Count
+                        $processed = 0
+
+                        foreach ($dir in $excludedDirsInBackup) {
+                            $fullPath = Join-Path $destination $dir
+                            if (Test-Path $fullPath) {
+                                try {
+                                    Remove-Item -Path $fullPath -Recurse -Force -ErrorAction Stop
+                                    $excludedDeletedDirs++
+                                } catch {
+                                    Write-Host "  Failed to delete: $dir" -ForegroundColor Red
+                                }
+                            }
+                            $processed++
+                            $pct = [math]::Floor(($processed / $totalItems) * 100)
+                            Write-Host "`r  Progress: $pct% | Deleted: $excludedDeletedDirs dirs, $excludedDeletedFiles files" -NoNewline -ForegroundColor Yellow
+                        }
+
+                        foreach ($file in $excludedInBackup) {
+                            $fullPath = Join-Path $destination $file
+                            if (Test-Path $fullPath) {
+                                try {
+                                    Remove-Item -Path $fullPath -Force -ErrorAction Stop
+                                    $excludedDeletedFiles++
+                                } catch {
+                                    Write-Host "  Failed to delete: $file" -ForegroundColor Red
+                                }
+                            }
+                            $processed++
+                            $pct = [math]::Floor(($processed / $totalItems) * 100)
+                            Write-Host "`r  Progress: $pct% | Deleted: $excludedDeletedDirs dirs, $excludedDeletedFiles files" -NoNewline -ForegroundColor Yellow
+                        }
+                        Write-Host ""
+                    }
+
+                    Write-Host "  Removed $excludedDeletedDirs excluded dirs, $excludedDeletedFiles excluded files" -ForegroundColor Gray
+
+                    $script:deletedDirs += $excludedDeletedDirs
+                    $script:deletedFiles += $excludedDeletedFiles
+                }
+
+            # Resume OneDrive sync
+            if ($oneDrivePaused) {
+                Write-Host ""
+                Resume-OneDriveSync
+            }
 
             Write-Host ""
             Write-Host "✅ Cleanup complete! Total deleted: $($script:deletedDirs) dirs, $($script:deletedFiles) files" -ForegroundColor Green
