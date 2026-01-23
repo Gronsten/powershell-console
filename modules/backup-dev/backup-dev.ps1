@@ -109,42 +109,33 @@ function Get-ExclusionFlags {
 
     $excludeFlags = ""
 
-    # Check if backupDev section exists (backward compatibility)
+    # Check if backupDev section exists
     if (-not $BackupConfig.PSObject.Properties.Name -contains "backupDev") {
-        Write-Host "Warning: No 'backupDev' section in config.json - using defaults only (/XJ)" -ForegroundColor Yellow
+        Write-Host "Error: No 'backupDev' section in config.json" -ForegroundColor Red
+        Write-Host "Please add the 'backupDev' section from config.example.json to your config.json" -ForegroundColor Yellow
         return ""
     }
 
     $backupDev = $BackupConfig.backupDev
 
-    # Support both old and new config structures for backward compatibility
+    # Check for unified exclusions structure (required as of v1.14.0)
+    if (-not ($backupDev.PSObject.Properties.Name -contains "exclusions")) {
+        Write-Host "Error: Config uses deprecated structure. Please update to unified exclusions format." -ForegroundColor Red
+        Write-Host "Required structure: backupDev.exclusions.{directories,files}" -ForegroundColor Yellow
+        Write-Host "See config.example.json for reference (config version: config.12+)" -ForegroundColor Yellow
+        return ""
+    }
+
+    $exclusions = $backupDev.exclusions
     $allExcludeDirs = @()
     $allExcludeFiles = @()
 
-    # New unified structure: backupDev.exclusions.directories/files
-    if ($backupDev.PSObject.Properties.Name -contains "exclusions") {
-        if ($backupDev.exclusions.PSObject.Properties.Name -contains "directories" -and $backupDev.exclusions.directories) {
-            $allExcludeDirs += $backupDev.exclusions.directories
-        }
-        if ($backupDev.exclusions.PSObject.Properties.Name -contains "files" -and $backupDev.exclusions.files) {
-            $allExcludeFiles += $backupDev.exclusions.files
-        }
+    # Load exclusions from unified structure
+    if ($exclusions.PSObject.Properties.Name -contains "directories" -and $exclusions.directories) {
+        $allExcludeDirs += $exclusions.directories
     }
-
-    # Old structure (backward compatibility): backupDev.excludeDirectories/excludeFiles + customExclusions
-    if ($backupDev.PSObject.Properties.Name -contains "excludeDirectories" -and $backupDev.excludeDirectories) {
-        $allExcludeDirs += $backupDev.excludeDirectories
-    }
-    if ($backupDev.PSObject.Properties.Name -contains "excludeFiles" -and $backupDev.excludeFiles) {
-        $allExcludeFiles += $backupDev.excludeFiles
-    }
-    if ($backupDev.PSObject.Properties.Name -contains "customExclusions") {
-        if ($backupDev.customExclusions.PSObject.Properties.Name -contains "directories" -and $backupDev.customExclusions.directories) {
-            $allExcludeDirs += $backupDev.customExclusions.directories
-        }
-        if ($backupDev.customExclusions.PSObject.Properties.Name -contains "files" -and $backupDev.customExclusions.files) {
-            $allExcludeFiles += $backupDev.customExclusions.files
-        }
+    if ($exclusions.PSObject.Properties.Name -contains "files" -and $exclusions.files) {
+        $allExcludeFiles += $exclusions.files
     }
 
     # Remove duplicates

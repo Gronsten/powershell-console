@@ -298,7 +298,9 @@
         "*.class",
         "*.jar",
         "*.war",
-        "*.ear"
+        "*.ear",
+        "backup-scan-result.json",
+        "backup-delete-result.json"
       ]
     },
     "mirrorMode": false,
@@ -310,5 +312,5 @@
       "management": "All exclusions are fully editable via the 'Manage Exclusions' menu option"
     }
   },
-  "configVersion": "config.13"
+  "configVersion": "config.14"
 }
