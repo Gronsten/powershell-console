@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.20.0"
+$script:ConsoleVersion = "1.20.1"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -3399,6 +3399,62 @@ function Search-Packages {
     Write-Host ""
 }
 
+function Invoke-ScoopInJob {
+    <#
+    .SYNOPSIS
+    Executes a scoop command in a background job to prevent console artifacts.
+
+    .DESCRIPTION
+    Scoop's progress bars use direct console API calls that bypass PowerShell's
+    output redirection, causing visual artifacts. This function isolates scoop
+    commands in background jobs and provides filtered output.
+
+    .PARAMETER Command
+    The scoop command to execute (e.g., "cleanup * -k", "cache rm *")
+
+    .PARAMETER OutputFilter
+    Optional scriptblock to filter/format output lines. Default shows "Removing" lines.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Command,
+
+        [scriptblock]$OutputFilter = {
+            param($line)
+            # Default: show "Removing" lines with formatted output
+            if ($line -match 'Removing\s+(.+):\s+(.+)') {
+                Write-Host "    • $($matches[1]): $($matches[2])" -ForegroundColor Gray
+            }
+        }
+    )
+
+    # Start background job to isolate console output
+    $job = Start-Job -ScriptBlock ([scriptblock]::Create("scoop $Command 2>&1"))
+
+    # Poll job output and apply filter
+    while ($job.State -eq 'Running') {
+        $output = Receive-Job $job 2>&1
+        if ($output) {
+            $output | ForEach-Object {
+                & $OutputFilter $_.ToString()
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
+    # Get any remaining output
+    $output = Receive-Job $job 2>&1
+    if ($output) {
+        $output | ForEach-Object {
+            & $OutputFilter $_.ToString()
+        }
+    }
+
+    # Clean up job
+    $job | Remove-Job
+}
+
 function Invoke-PackageManagerCleanup {
     [CmdletBinding()]
     param()
@@ -3418,12 +3474,18 @@ function Invoke-PackageManagerCleanup {
         if ($scoopCmd) {
             # Run scoop checkup
             Write-Host "  Running scoop checkup..." -ForegroundColor Cyan
-            scoop checkup
+            Invoke-ScoopInJob -Command "checkup" -OutputFilter {
+                param($line)
+                # Show all checkup output but filter progress artifacts
+                if ($line -notmatch '^\s*$' -and $line -notmatch '\[[\d\/]+\]') {
+                    Write-Host "    $line" -ForegroundColor Gray
+                }
+            }
             Write-Host ""
 
             # Run scoop cleanup for all apps (removes old versions)
             Write-Host "  Cleaning up old versions..." -ForegroundColor Cyan
-            scoop cleanup * -k
+            Invoke-ScoopInJob -Command "cleanup * -k"
             Write-Host "  ✅ Old versions cleaned" -ForegroundColor Green
             Write-Host ""
 
@@ -3432,7 +3494,22 @@ function Invoke-PackageManagerCleanup {
             $wipeCacheResponse = Read-Host
             if ($wipeCacheResponse -match '^[Yy]') {
                 Write-Host "  Removing all cached installers..." -ForegroundColor Cyan
-                scoop cache rm *
+
+                # Track removal count for progress feedback
+                $script:removeCount = 0
+                Invoke-ScoopInJob -Command "cache rm *" -OutputFilter {
+                    param($line)
+                    if ($line -match 'Removing') {
+                        $script:removeCount++
+                        if ($script:removeCount % 10 -eq 0) {
+                            Write-Host "    • Removed $($script:removeCount) files..." -ForegroundColor Gray
+                        }
+                    }
+                }
+
+                if ($script:removeCount -gt 0) {
+                    Write-Host "    • Removed $($script:removeCount) total files" -ForegroundColor Gray
+                }
                 Write-Host "  ✅ Scoop cache completely cleared" -ForegroundColor Green
             } else {
                 Write-Host "  Skipping full cache wipe" -ForegroundColor Gray
