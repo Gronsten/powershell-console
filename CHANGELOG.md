@@ -20,6 +20,25 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.20.1 (2026-02-10)
+
+**Bug Fixes:**
+- **Package Manager Cleanup: Fixed Scoop visual artifacts** - Eliminated console artifacts during scoop cleanup operations
+  - Root cause: Scoop's progress bars use direct console API calls that bypass PowerShell output redirection
+  - Solution: Introduced `Invoke-ScoopInJob` helper function to isolate scoop commands in background jobs
+  - All scoop commands (`checkup`, `cleanup`, `cache rm`) now run in isolated jobs with filtered output
+  - Prevents progress bar bleed-through that was causing menu repaint issues
+  - No longer requires console restart after cleanup operations
+  - Restores v1.13.1 fix with cleaner, more maintainable implementation using helper function
+  - Reduces code duplication: ~60 lines of repeated job management → ~55 line reusable helper + function calls
+
+**Technical Details:**
+- Added `Invoke-ScoopInJob` function to manage background job execution and output filtering
+- Customizable output filter via scriptblock parameter for different scoop commands
+- Default filter shows "Removing" messages with formatted output
+- Cache removal uses custom filter with progress counting (shows count every 10 files)
+- Checkup uses custom filter to show diagnostic output while filtering progress artifacts
+
 ### v1.20.0 (2026-01-22)
 
 **Bug Fixes:**
