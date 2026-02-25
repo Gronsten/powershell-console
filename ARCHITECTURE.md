@@ -1,7 +1,7 @@
 # PowerShell Console - Architecture Guide
 
-**Version:** 1.13.0
-**Last Updated:** 2025-12-01
+**Version:** 1.21.0
+**Last Updated:** 2026-02-24
 **Purpose:** Technical architecture reference for Claude AI assistant sessions
 
 ---
@@ -29,7 +29,7 @@ A comprehensive, interactive PowerShell management console (6,200+ lines) for:
 - **AWS Infrastructure Management** - Multi-account AWS management with Okta SSO
 - **Package Management** - Unified interface for Scoop, npm, pip, winget
 - **Remote Access** - Automated AWS SSM port forwarding and RDP integration
-- **Development Utilities** - Code counting, environment backups, network tools
+- **Development Utilities** - Code counting, Excel workbook tools, environment backups, network tools
 - **System Administration** - Network diagnostics, configuration editing
 
 ### Core Design Principles
@@ -63,15 +63,20 @@ A comprehensive, interactive PowerShell management console (6,200+ lines) for:
 │   │   │   ├── aws-prompt-theme.omp.json
 │   │   │   ├── quick-term-aws.omp.json
 │   │   │   └── README.md
-│   │   └── backup-dev/           # Development environment backup utility
-│   │       ├── backup-dev.ps1
-│   │       ├── backup-dev.log
-│   │       ├── backup-history.log
-│   │       └── README.md
+│   │   ├── backup-dev/           # Development environment backup utility
+│   │   │   ├── backup-dev.ps1
+│   │   │   ├── backup-dev.log
+│   │   │   ├── backup-history.log
+│   │   │   └── README.md
+│   │   ├── excel-tools/          # Excel workbook processing utilities
+│   │   │   ├── excel-tools.py    # Main Python script (full arrow-key menu UI)
+│   │   │   └── excel-tools.json  # Module config (paths, template filenames)
+│   │   └── line-counter/         # Code line counting utility
+│   │       ├── count-lines.py    # Python-based line counter
+│   │       └── line-counter-exclusions.ps1  # Exclusion management functions
 │   │
 │   ├── scripts/                  # Utility scripts
 │   │   ├── aws-logout.ps1        # Clean AWS credential logout
-│   │   ├── count-lines.py        # Python-based line counter
 │   │   └── README.md
 │   │
 │   ├── resources/                # Static data files
@@ -589,7 +594,23 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
 
 ### 8. Development Utilities
 
-**Code Line Counter**: `Start-CodeCount` (line ~3200)
+**Excel Tools**: `Start-ExcelTools` (line ~4398) — _added v1.21.0_
+- Python-based: modules/excel-tools/excel-tools.py
+- **Configuration**: modules/excel-tools/excel-tools.json (Lumen invoice paths/templates)
+- **Execution**: `python excel-tools.py` (run from the excel-tools directory so json config is found)
+- **UI style**: ANSI color output + arrow-key navigation matching PowerShell console style (`msvcrt`)
+- **Operations:**
+  1. Unprotect & Unhide sheets — removes sheet protection and unhides all sheets
+  2. Re-protect & Re-hide sheets — per-sheet protection settings via checkbox UI; restores hidden sheets
+  3. Strip external workbook links — removes `[Book.xlsx]` references from formulas
+  4. Find & Replace in formulas — regex-capable formula text replacement
+  5. Dump all formulas (debug) — exports all formulas to console
+  6. Compare workbooks — structural/formula diff between two workbooks
+  7. Generate Lumen invoices — auto-fills billing templates from PO reference file
+  8. Clear all tab colors — removes custom tab colors from all sheets
+- **Dependencies**: openpyxl, tkinter (file picker)
+
+**Code Line Counter**: `Start-CodeCount` (line ~4430)
 - Python-based: modules/line-counter/count-lines.py
 - **Configuration-driven exclusions** via config.json `lineCounter` section
 - Features:
@@ -771,14 +792,17 @@ aws ssm start-session `
 
 **v1.9.3 Change**: Configurable output path with backward compatible fallback
 
-### Development Utility Functions (Lines 3200-3500)
+### Development Utility Functions (Lines 4330-4900)
 
 | Function | Purpose | External Script |
 |----------|---------|----------------|
+| `Start-ExcelTools` | Excel workbook utilities | `python modules/excel-tools/excel-tools.py` (v1.21.0) |
 | `Start-CodeCount` | Count code lines | `python modules/line-counter/count-lines.py` |
+| `Start-CodeCountBrowser` | Alias for `Start-CodeCount` | (wrapper) |
+| `Show-CodeCountMenu` | Code Count submenu | Submenu with browser + exclusion management |
 | `Start-BackupDevEnvironment` | Backup dev directory | `.\modules\backup-dev\backup-dev.ps1` |
 | `Get-LastBackupTimestamp` | Get last FULL backup timestamp | Reads from `modules/backup-dev/backup-dev.log` (v1.12.0) |
-| `Start-MerakiBackup` | Meraki config backup | External Python script |
+| `Start-MerakiBackup` | Meraki config backup (not in main menu since v1.21.0) | External Python script |
 | `Show-AboutMenu` | Display version info and links | Shows console/config versions, repo, sponsor (v1.12.0) |
 
 ### Utility/Helper Functions (Throughout)

@@ -20,6 +20,28 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.21.0 (2026-02-24)
+
+**New Features:**
+- **Excel Tools module** — New Python-based Excel workbook utility suite (`modules/excel-tools/`)
+  - Full arrow-key navigation menu with ANSI color output, matching the PowerShell console visual style
+  - Configuration via `modules/excel-tools/excel-tools.json` (Lumen invoice paths and template filenames)
+  - **Operations available:**
+    1. Unprotect & Unhide — removes sheet protection and unhides all sheets
+    2. Re-protect & Re-hide — per-sheet protection settings via interactive checkbox UI; restores hidden sheets
+    3. Strip external links — removes `[Book.xlsx]` references from formulas
+    4. Find & Replace in formulas — text replacement across all formula cells
+    5. Dump all formulas — debug export of every formula cell to console
+    6. Compare workbooks — structural and formula diff between two workbooks
+    7. Generate Lumen invoices — auto-fills monthly billing templates from a PO reference file
+    8. Clear all tab colors — removes custom tab colors from all sheets
+  - Launched via `Start-ExcelTools` in `console.ps1`; runs from its module directory so `excel-tools.json` is found automatically
+  - Dependencies: `openpyxl` (pip), `tkinter` (Python stdlib, for file picker)
+
+**Menu Changes:**
+- **Added "Excel Tools"** to main menu (positioned above "Code Count") — calls `Start-ExcelTools`
+- **Removed "Meraki Backup"** from main menu — the function (`Start-MerakiBackup`) and all scripts remain available for manual invocation; the menu option is retired as it is no longer a routine workflow
+
 ### v1.20.1 (2026-02-10)
 
 **Bug Fixes:**

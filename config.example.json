@@ -116,12 +116,12 @@
         "action": "\r\n            Invoke-Expression \"icacls '$($script:Config.paths.linksPath)' /t /setintegritylevel m\"\r\n            Invoke-StandardPause\r\n        "
       },
       {
-        "text": "Meraki Backup",
-        "action": "\r\n            Start-MerakiBackup\r\n        "
+        "text": "Excel Tools",
+        "action": "\r\n            Start-ExcelTools\r\n        "
       },
       {
         "text": "Code Count",
-        "action": "\r\n            Start-CodeCount\r\n        "
+        "action": "\r\n            Show-CodeCountMenu\r\n        "
       },
       {
         "text": "Backup Dev Environment",

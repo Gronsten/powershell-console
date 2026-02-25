@@ -4,6 +4,7 @@
 
 # Configuration files with sensitive data
 config.json
+modules/excel-tools/excel-tools.json
 *.backup-*
 
 # Local-only upgrade script (exists in parent directory)
