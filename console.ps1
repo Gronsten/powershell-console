@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.20.1"
+$script:ConsoleVersion = "1.21.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -4395,6 +4395,37 @@ function Start-MerakiBackup {
     Invoke-StandardPause
 }
 
+function Start-ExcelTools {
+    $excelToolsScript = Join-Path $PSScriptRoot "modules\excel-tools\excel-tools.py"
+    $excelToolsDir    = Join-Path $PSScriptRoot "modules\excel-tools"
+
+    # Check if Python is available
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCmd) {
+        Write-Host "`nPython not found in PATH. Please ensure Python is installed." -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+
+    # Check if excel-tools.py exists
+    if (-not (Test-Path $excelToolsScript)) {
+        Write-Host "`nexcel-tools.py not found at: $excelToolsScript" -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+
+    # Run from the module directory so excel-tools.json is found by relative path
+    Push-Location $excelToolsDir
+    try {
+        python $excelToolsScript
+    }
+    finally {
+        Pop-Location
+    }
+
+    Invoke-StandardPause
+}
+
 function Start-CodeCount {
     # Use $PSScriptRoot to get the actual script directory
     $countScriptPath = Join-Path $PSScriptRoot "modules\line-counter\count-lines.py"
@@ -5593,8 +5624,8 @@ function Show-MainMenu {
             Invoke-Expression "icacls '$($script:Config.paths.linksPath)' /t /setintegritylevel m"
     Invoke-StandardPause
         }),
-        (New-MenuAction "Meraki Backup" {
-            Start-MerakiBackup
+        (New-MenuAction "Excel Tools" {
+            Start-ExcelTools
         }),
         (New-MenuAction "Code Count" {
             Show-CodeCountMenu
