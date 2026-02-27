@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.21.0"
+$script:ConsoleVersion = "1.21.1"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -3399,15 +3399,22 @@ function Search-Packages {
     Write-Host ""
 }
 
-function Invoke-ScoopInJob {
+function Invoke-ScoopProcess {
     <#
     .SYNOPSIS
-    Executes a scoop command in a background job to prevent console artifacts.
+    Executes a scoop command in an isolated hidden process to prevent console artifacts.
 
     .DESCRIPTION
-    Scoop's progress bars use direct console API calls that bypass PowerShell's
-    output redirection, causing visual artifacts. This function isolates scoop
-    commands in background jobs and provides filtered output.
+    Scoop's progress bars use direct Windows Console API calls (cursor positioning,
+    ANSI sequences) that target the process's inherited console handle, bypassing
+    PowerShell's output pipeline. Start-Job shares the parent console handle, so
+    artifacts from large progress bars (e.g. AWS with thousands of files) still
+    bleed through.
+
+    This function runs scoop via Start-Process -WindowStyle Hidden, which creates a
+    new hidden console window. All of scoop's direct console writes target that
+    hidden window instead of ours. Stdout is redirected to a temp file and streamed
+    in real-time so per-package output still appears as it happens.
 
     .PARAMETER Command
     The scoop command to execute (e.g., "cleanup * -k", "cache rm *")
@@ -3429,30 +3436,62 @@ function Invoke-ScoopInJob {
         }
     )
 
-    # Start background job to isolate console output
-    $job = Start-Job -ScriptBlock ([scriptblock]::Create("scoop $Command 2>&1"))
+    $tempOut = [System.IO.Path]::GetTempFileName()
+    $tempErr = [System.IO.Path]::GetTempFileName()
 
-    # Poll job output and apply filter
-    while ($job.State -eq 'Running') {
-        $output = Receive-Job $job 2>&1
-        if ($output) {
-            $output | ForEach-Object {
-                & $OutputFilter $_.ToString()
+    # Regex to strip ANSI escape sequences from captured output before it reaches our console
+    $ansiPattern = [System.Text.RegularExpressions.Regex]'\x1B\[[0-9;]*[a-zA-Z]'
+
+    try {
+        # Encode the command to avoid argument-escaping issues with * and spaces
+        $psCommand = "scoop $Command"
+        $encodedCommand = [Convert]::ToBase64String(
+            [System.Text.Encoding]::Unicode.GetBytes($psCommand)
+        )
+
+        # Launch scoop in a new hidden console window. Its direct console writes
+        # (progress bars, cursor movement) target that hidden window, not ours.
+        $proc = Start-Process -FilePath "pwsh" `
+            -ArgumentList @("-NoProfile", "-NonInteractive", "-EncodedCommand", $encodedCommand) `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $tempOut `
+            -RedirectStandardError $tempErr `
+            -PassThru
+
+        # Open the temp file with ReadWrite sharing so we can tail it while the process writes
+        $fileStream = [System.IO.File]::Open(
+            $tempOut,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite
+        )
+        $reader = [System.IO.StreamReader]::new($fileStream)
+
+        try {
+            # Stream output in real-time while process runs
+            while (!$proc.HasExited) {
+                while (!$reader.EndOfStream) {
+                    $raw  = $reader.ReadLine()
+                    $line = $ansiPattern.Replace($raw, '').Trim()
+                    if ($line) { & $OutputFilter $line }
+                }
+                Start-Sleep -Milliseconds 100
             }
-        }
-        Start-Sleep -Milliseconds 100
-    }
+            $proc.WaitForExit()
 
-    # Get any remaining output
-    $output = Receive-Job $job 2>&1
-    if ($output) {
-        $output | ForEach-Object {
-            & $OutputFilter $_.ToString()
+            # Drain any remaining output after process exits
+            while (!$reader.EndOfStream) {
+                $raw  = $reader.ReadLine()
+                $line = $ansiPattern.Replace($raw, '').Trim()
+                if ($line) { & $OutputFilter $line }
+            }
+        } finally {
+            $reader.Dispose()
+            $fileStream.Dispose()
         }
+    } finally {
+        Remove-Item $tempOut, $tempErr -Force -ErrorAction SilentlyContinue
     }
-
-    # Clean up job
-    $job | Remove-Job
 }
 
 function Invoke-PackageManagerCleanup {
@@ -3472,9 +3511,12 @@ function Invoke-PackageManagerCleanup {
     try {
         $scoopCmd = Get-Command scoop -ErrorAction SilentlyContinue
         if ($scoopCmd) {
+            # Resolve scoop root (respects custom SCOOP env var)
+            $scoopRoot = if ($env:SCOOP) { $env:SCOOP } else { "$env:USERPROFILE\scoop" }
+
             # Run scoop checkup
             Write-Host "  Running scoop checkup..." -ForegroundColor Cyan
-            Invoke-ScoopInJob -Command "checkup" -OutputFilter {
+            Invoke-ScoopProcess -Command "checkup" -OutputFilter {
                 param($line)
                 # Show all checkup output but filter progress artifacts
                 if ($line -notmatch '^\s*$' -and $line -notmatch '\[[\d\/]+\]') {
@@ -3483,36 +3525,55 @@ function Invoke-PackageManagerCleanup {
             }
             Write-Host ""
 
-            # Run scoop cleanup for all apps (removes old versions)
-            Write-Host "  Cleaning up old versions..." -ForegroundColor Cyan
-            Invoke-ScoopInJob -Command "cleanup * -k"
-            Write-Host "  ✅ Old versions cleaned" -ForegroundColor Green
+            # Check how many apps have old versions before running cleanup
+            $appsNeedingCleanup = @(
+                Get-ChildItem "$scoopRoot\apps" -Directory -ErrorAction SilentlyContinue |
+                Where-Object {
+                    (Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -ne 'current' }).Count -gt 1
+                }
+            )
+            if ($appsNeedingCleanup.Count -gt 0) {
+                Write-Host "  Cleaning up old versions ($($appsNeedingCleanup.Count) app(s))..." -ForegroundColor Cyan
+                Invoke-ScoopProcess -Command "cleanup * -k"
+                Write-Host "  ✅ Old versions cleaned" -ForegroundColor Green
+            } else {
+                Write-Host "  ✅ No old versions to clean" -ForegroundColor Green
+            }
             Write-Host ""
 
-            # Ask about clearing cache
-            Write-Host "  Clear cache (removes cached installers)? (y/N): " -ForegroundColor Yellow -NoNewline
-            $wipeCacheResponse = Read-Host
-            if ($wipeCacheResponse -match '^[Yy]') {
-                Write-Host "  Removing all cached installers..." -ForegroundColor Cyan
+            # Check cache contents before prompting
+            $cacheFiles = @(Get-ChildItem "$scoopRoot\cache" -File -ErrorAction SilentlyContinue)
+            if ($cacheFiles.Count -gt 0) {
+                $cacheSizeMB = [math]::Round(
+                    ($cacheFiles | Measure-Object -Property Length -Sum).Sum / 1MB, 1
+                )
+                Write-Host "  Clear cache ($($cacheFiles.Count) file(s), $cacheSizeMB MB)? (y/N): " -ForegroundColor Yellow -NoNewline
+                $wipeCacheResponse = Read-Host
+                if ($wipeCacheResponse -match '^[Yy]') {
+                    Write-Host "  Removing all cached installers..." -ForegroundColor Cyan
 
-                # Track removal count for progress feedback
-                $script:removeCount = 0
-                Invoke-ScoopInJob -Command "cache rm *" -OutputFilter {
-                    param($line)
-                    if ($line -match 'Removing') {
-                        $script:removeCount++
-                        if ($script:removeCount % 10 -eq 0) {
-                            Write-Host "    • Removed $($script:removeCount) files..." -ForegroundColor Gray
+                    # Track removal count for progress feedback
+                    $script:removeCount = 0
+                    Invoke-ScoopProcess -Command "cache rm *" -OutputFilter {
+                        param($line)
+                        if ($line -match 'Removing') {
+                            $script:removeCount++
+                            if ($script:removeCount % 10 -eq 0) {
+                                Write-Host "    • Removed $($script:removeCount) files..." -ForegroundColor Gray
+                            }
                         }
                     }
-                }
 
-                if ($script:removeCount -gt 0) {
-                    Write-Host "    • Removed $($script:removeCount) total files" -ForegroundColor Gray
+                    if ($script:removeCount -gt 0) {
+                        Write-Host "    • Removed $($script:removeCount) total files" -ForegroundColor Gray
+                    }
+                    Write-Host "  ✅ Scoop cache cleared" -ForegroundColor Green
+                } else {
+                    Write-Host "  Skipping cache wipe" -ForegroundColor Gray
                 }
-                Write-Host "  ✅ Scoop cache completely cleared" -ForegroundColor Green
             } else {
-                Write-Host "  Skipping full cache wipe" -ForegroundColor Gray
+                Write-Host "  ✅ Scoop cache is empty" -ForegroundColor Green
             }
         } else {
             Write-Host "  ⚠️  Scoop not found" -ForegroundColor Red
@@ -3601,10 +3662,19 @@ function Invoke-PackageManagerCleanup {
             }
             Write-Host ""
 
-            # Purge cache
-            Write-Host "  Purging pip cache..." -ForegroundColor Cyan
-            pip cache purge
-            Write-Host "  ✅ pip cache purged" -ForegroundColor Green
+            # Check pip cache before purging
+            $pipCacheInfo = pip cache info 2>&1 | Out-String
+            $pipCachePackages = 0
+            if ($pipCacheInfo -match 'Number of cached packages:\s*(\d+)') {
+                $pipCachePackages = [int]$matches[1]
+            }
+            if ($pipCachePackages -gt 0) {
+                Write-Host "  Purging pip cache ($pipCachePackages package(s))..." -ForegroundColor Cyan
+                pip cache purge
+                Write-Host "  ✅ pip cache purged" -ForegroundColor Green
+            } else {
+                Write-Host "  ✅ pip cache is empty" -ForegroundColor Green
+            }
         } else {
             Write-Host "  ⚠️  Python/pip not found" -ForegroundColor Red
         }
@@ -3629,24 +3699,32 @@ function Invoke-PackageManagerCleanup {
             # It's used for package manifest validation, not winget itself
             # winget source update already validates the installation
 
-            # Clean winget cache
-            Write-Host "  Clear winget cache? (y/N): " -ForegroundColor Yellow -NoNewline
-            $clearWingetCacheResponse = Read-Host
-            if ($clearWingetCacheResponse -match '^[Yy]') {
-                Write-Host "  Clearing winget cache..." -ForegroundColor Cyan
-                $cachePath = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\AC\INetCache"
-                if (Test-Path $cachePath) {
-                    try {
-                        Remove-Item "$cachePath\*" -Recurse -Force -ErrorAction Stop
-                        Write-Host "  ✅ winget cache cleared" -ForegroundColor Green
-                    } catch {
-                        Write-Host "  ⚠️  Error clearing cache: $_" -ForegroundColor Red
+            # Check winget cache before prompting
+            $wingetCachePath = "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\AC\INetCache"
+            if (Test-Path $wingetCachePath) {
+                $wingetCacheItems = @(Get-ChildItem "$wingetCachePath\*" -Recurse -File -ErrorAction SilentlyContinue)
+                if ($wingetCacheItems.Count -gt 0) {
+                    $wingetSizeMB = [math]::Round(
+                        ($wingetCacheItems | Measure-Object -Property Length -Sum).Sum / 1MB, 1
+                    )
+                    Write-Host "  Clear winget cache ($($wingetCacheItems.Count) file(s), $wingetSizeMB MB)? (y/N): " -ForegroundColor Yellow -NoNewline
+                    $clearWingetCacheResponse = Read-Host
+                    if ($clearWingetCacheResponse -match '^[Yy]') {
+                        Write-Host "  Clearing winget cache..." -ForegroundColor Cyan
+                        try {
+                            Remove-Item "$wingetCachePath\*" -Recurse -Force -ErrorAction Stop
+                            Write-Host "  ✅ winget cache cleared" -ForegroundColor Green
+                        } catch {
+                            Write-Host "  ⚠️  Error clearing cache: $_" -ForegroundColor Red
+                        }
+                    } else {
+                        Write-Host "  Skipping cache clear" -ForegroundColor Gray
                     }
                 } else {
-                    Write-Host "  ⚠️  Cache path not found" -ForegroundColor Yellow
+                    Write-Host "  ✅ winget cache is empty" -ForegroundColor Green
                 }
             } else {
-                Write-Host "  Skipping cache clear" -ForegroundColor Gray
+                Write-Host "  ✅ winget cache path not found (nothing to clear)" -ForegroundColor Green
             }
         } else {
             Write-Host "  ⚠️  winget not found" -ForegroundColor Red

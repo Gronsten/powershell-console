@@ -20,6 +20,35 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.21.1 (2026-02-27)
+
+**Bug Fixes:**
+- **Package Manager: Fixed scoop cleanup visual artifacts for large packages** — Eliminated
+  console artifacts that persisted after cleaning large packages (e.g. AWS CLI) even with
+  the v1.20.1 `Invoke-ScoopInJob` fix
+  - Root cause: `Start-Job` background jobs **inherit the parent's console handle**, so
+    scoop's direct Windows Console API calls (cursor positioning, ANSI progress bars)
+    still targeted our console window — bypassing PowerShell's output pipeline entirely.
+    Large packages with hundreds/thousands of files generate extensive progress bar
+    activity that didn't clean up properly.
+  - Solution: Replaced `Start-Job` with `Start-Process -WindowStyle Hidden`, which creates
+    a **new hidden console window** for the child process. Scoop's console writes now target
+    that hidden window instead of ours.
+  - Stdout is redirected to a temp file and streamed in real-time via `StreamReader` with
+    `ReadWrite` file sharing, so per-package output still appears as it happens.
+  - ANSI escape sequences are stripped from captured output before display to prevent
+    scoop's color codes from rendering on our console.
+  - `-EncodedCommand` used for argument passing to avoid escaping issues with `*` in
+    commands like `cleanup * -k`.
+  - Renamed `Invoke-ScoopInJob` → `Invoke-ScoopProcess` to reflect the new implementation.
+- **Package Manager: Pre-checks before prompting to clear caches** — Each package manager
+  now inspects its cache before running or prompting, skipping unnecessary steps silently
+  - **Scoop old versions**: Counts apps with stale version directories; skips `scoop cleanup`
+    entirely if nothing to remove (shows "✅ No old versions to clean")
+  - **Scoop cache**: Shows file count and MB before prompting; skips prompt entirely if empty
+  - **pip cache**: Runs `pip cache info` first; skips `pip cache purge` if 0 packages cached
+  - **winget cache**: Counts files and MB before prompting; skips prompt if empty or path absent
+
 ### v1.21.0 (2026-02-24)
 
 **New Features:**
