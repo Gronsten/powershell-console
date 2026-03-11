@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.21.1"
+$script:ConsoleVersion = "1.22.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -1939,12 +1939,72 @@ function Search-Packages {
         return
     }
 
-    $searchScope = Read-Host "Search (I)nstalled or (G)lobally available packages? (I/g)"
-    $searchInstalled = $true
-    if ($searchScope.ToLower() -eq "g") {
-        $searchInstalled = $false
+    # Determine default scope from config (defaults to installed)
+    $defaultScopeIndex = 0  # 0 = installed, 1 = globally available
+    if ($script:Config.PSObject.Properties['packageManager'] -and
+        $script:Config.packageManager.PSObject.Properties['lastSearchScope'] -and
+        $script:Config.packageManager.lastSearchScope -eq 'global') {
+        $defaultScopeIndex = 1
+    }
+
+    # Interactive horizontal scope selection — ◄► arrows or single-key I/G
+    $scopeIndex = $defaultScopeIndex
+    Write-Host "  I / G to select, ◄► arrows to toggle + ⏎ to confirm" -ForegroundColor DarkGray
+    $promptRow = [Console]::CursorTop
+
+    $renderScope = {
+        param([int]$idx)
+        Write-Host "  Search scope: " -NoNewline
+        if ($idx -eq 0) {
+            Write-Host "[ (I)nstalled ] " -ForegroundColor Cyan -NoNewline
+            Write-Host "  (G)lobally available  " -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host "  (I)nstalled   " -ForegroundColor DarkGray -NoNewline
+            Write-Host "[ (G)lobally available ]" -ForegroundColor Cyan
+        }
+    }
+
+    & $renderScope $scopeIndex
+
+    $scopeDone = $false
+    while (-not $scopeDone) {
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'LeftArrow'  { $scopeIndex = 0 }
+            'RightArrow' { $scopeIndex = 1 }
+            'Enter'      { $scopeDone = $true }
+        }
+        switch ($key.KeyChar.ToString().ToLower()) {
+            'i' { $scopeIndex = 0; $scopeDone = $true }
+            'g' { $scopeIndex = 1; $scopeDone = $true }
+        }
+        [Console]::SetCursorPosition(0, $promptRow)
+        & $renderScope $scopeIndex
+    }
+
+    $searchInstalled = ($scopeIndex -eq 0)
+
+    # Persist chosen scope to config.json for next session
+    $configPath = Join-Path $PSScriptRoot "config.json"
+    $configToSave = Get-Content $configPath -Raw | ConvertFrom-Json
+    if (-not $configToSave.PSObject.Properties['packageManager']) {
+        $configToSave | Add-Member -NotePropertyName 'packageManager' -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    $scopeValue = if ($searchInstalled) { 'installed' } else { 'global' }
+    if ($configToSave.packageManager.PSObject.Properties['lastSearchScope']) {
+        $configToSave.packageManager.lastSearchScope = $scopeValue
+    }
+    else {
+        $configToSave.packageManager | Add-Member -NotePropertyName 'lastSearchScope' -NotePropertyValue $scopeValue -Force
+    }
+    $configToSave | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+    $script:Config = $configToSave
+
+    if (-not $searchInstalled) {
         Write-Host "`nSearching globally for '$searchTerm' (installed packages highlighted in green)...`n" -ForegroundColor Cyan
-    } else {
+    }
+    else {
         Write-Host "`nSearching installed packages for '$searchTerm'...`n" -ForegroundColor Cyan
     }
 
