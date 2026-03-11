@@ -20,6 +20,20 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.0 (2026-03-10)
+
+**New Features:**
+- **Package Search: Interactive scope selector** — Replaced the `Read-Host` prompt "Search
+  (I)nstalled or (G)lobally available packages?" with a color-highlighted horizontal
+  selector. Use ◄► arrows to toggle between options or press I/G as a single keystroke
+  (no Enter required). The last-used scope is remembered across sessions in config.json.
+
+**Config Changes:**
+- Added `packageManager.lastSearchScope` (string: `"installed"` or `"global"`) — Persists
+  the last-selected package search scope; defaults to `"installed"`
+
+---
+
 ### v1.21.1 (2026-02-27)
 
 **Bug Fixes:**

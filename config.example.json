@@ -312,5 +312,8 @@
       "management": "All exclusions are fully editable via the 'Manage Exclusions' menu option"
     }
   },
-  "configVersion": "config.14"
+  "packageManager": {
+    "lastSearchScope": "installed"
+  },
+  "configVersion": "config.15"
 }
