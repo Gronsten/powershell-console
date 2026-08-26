@@ -1,7 +1,7 @@
 # PowerShell Console - Architecture Guide
 
-**Version:** 1.21.0
-**Last Updated:** 2026-02-24
+**Version:** 1.22.1
+**Last Updated:** 2026-08-24
 **Purpose:** Technical architecture reference for Claude AI assistant sessions
 
 ---
@@ -800,6 +800,10 @@ aws ssm start-session `
 | `Start-CodeCount` | Count code lines | `python modules/line-counter/count-lines.py` |
 | `Start-CodeCountBrowser` | Alias for `Start-CodeCount` | (wrapper) |
 | `Show-CodeCountMenu` | Code Count submenu | Submenu with browser + exclusion management |
+| `Show-EditConfigsMenu` | Edit Configs submenu | Opens profile / okta.yaml / VS Code settings in Cursor (v1.22.1) |
+| `Open-BackupDetailedLog` | Open backup-dev.log | `Open-ConfigInEditor` (v1.22.1) |
+| `Open-BackupHistoryLog` | Open backup-history.log | `Open-ConfigInEditor` (v1.22.1) |
+| `Show-DeprecatedBackupFiles` | Preview/clean extra backup files | Option 1 opens report in Cursor (v1.22.1) |
 | `Start-BackupDevEnvironment` | Backup dev directory | `.\modules\backup-dev\backup-dev.ps1` |
 | `Get-LastBackupTimestamp` | Get last FULL backup timestamp | Reads from `modules/backup-dev/backup-dev.log` (v1.12.0) |
 | `Start-MerakiBackup` | Meraki config backup (not in main menu since v1.21.0) | External Python script |
@@ -812,6 +816,8 @@ aws ssm start-session `
 | `Invoke-StandardPause` | Standard "Press any key" pause | Used throughout |
 | `Invoke-TimedPause` | Auto-continue with countdown | Used throughout |
 | `Restore-ConsoleState` | Cleanup on exit | Line 109, called on script exit |
+| `Resolve-CursorEditor` | Find `cursor` CLI, then Cursor.exe | PATH first, then Scoop / AppData / Program Files (v1.22.1) |
+| `Open-ConfigInEditor` | Open a file via `cursor <file> --classic` | Edit Configs, backup logs, deprecated-file report (v1.22.1) |
 
 ---
 
@@ -956,6 +962,7 @@ Show-ArrowMenu starts at position 5
 | **Python 3.x** | Line counter script | [python.org](https://www.python.org/) |
 | **oh-my-posh** | Prompt theming (for aws-prompt-indicator) | `winget install JanDeDobbeleer.OhMyPosh` |
 | **posh-git** | Git prompt integration | `Install-Module posh-git -Scope CurrentUser` |
+| **Cursor** | Open config files, backup logs, and reports from console menus | [cursor.com](https://cursor.com/) or `scoop install cursor` |
 
 ### AWS IAM Permissions Required
 
@@ -1014,6 +1021,16 @@ function Invoke-MyNewFunction {
 ```
 
 **Menu Persistence**: Changes saved to config.json automatically via Ctrl+Space/Ctrl+R
+
+### Opening files in Cursor (v1.22.1)
+
+Console menus that used to run `code <path>` (VS Code) now call `Open-ConfigInEditor`.
+
+1. `Resolve-CursorEditor` prefers `cursor` on PATH, then `Cursor.exe` under Scoop (`$env:SCOOP` or `C:\AppInstall\scoop\apps\cursor\current`), LocalAppData, or Program Files.
+2. `Open-ConfigInEditor` runs `Start-Process` as `cursor "<file>" --classic` (file first, then `--classic`; no `-r`) with stdout/stderr redirected. That matches the working CLI and opens the dedicated IDE rather than Agents. It does not wait unless `-Wait` is passed, and it does not print `$true` unless `-PassThru` is set.
+3. If Cursor is not installed, the helper prints an error. It does **not** fall back to VS Code's `code` command.
+
+Call sites: `Show-EditConfigsMenu`, `Open-BackupDetailedLog`, `Open-BackupHistoryLog`, `Show-DeprecatedBackupFiles`.
 
 ### 2. Adding a New Config Field
 

@@ -179,15 +179,15 @@
     "Edit Configs": [
       {
         "text": "PowerShell Profile",
-        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.profilePath)'\"\r\n            Invoke-StandardPause\r\n        "
+        "action": "\r\n            Open-ConfigInEditor -Path $script:Config.paths.profilePath\r\n            Invoke-StandardPause\r\n        "
       },
       {
         "text": "Okta YAML",
-        "action": "\r\n            Invoke-Expression \"code '$($script:Config.paths.oktaYamlPath)'\"\r\n            Invoke-StandardPause\r\n        "
+        "action": "\r\n            Open-ConfigInEditor -Path $script:Config.paths.oktaYamlPath\r\n            Invoke-StandardPause\r\n        "
       },
       {
         "text": "VS Code Settings",
-        "action": "\r\n            $vscodeSettingsPath = \"C:\\AppInstall\\scoop\\persist\\vscode\\data\\user-data\\User\\settings.json\"\r\n            if (Test-Path $vscodeSettingsPath) { Invoke-Expression \"code '$vscodeSettingsPath'\" } else { Write-Host 'VS Code settings not found' -ForegroundColor Yellow }\r\n            Invoke-StandardPause\r\n        "
+        "action": "\r\n            $vscodeSettingsPath = \"C:\\AppInstall\\scoop\\persist\\vscode\\data\\user-data\\User\\settings.json\"\r\n            if (Test-Path $vscodeSettingsPath) { Open-ConfigInEditor -Path $vscodeSettingsPath } else { Write-Host 'VS Code settings not found' -ForegroundColor Yellow }\r\n            Invoke-StandardPause\r\n        "
       }
     ]
   },

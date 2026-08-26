@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.22.0"
+$script:ConsoleVersion = "1.22.1"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -3853,6 +3853,140 @@ function New-MenuAction {
     }
 }
 
+function Resolve-CursorEditor {
+    <#
+    .SYNOPSIS
+        Resolves the Cursor launcher used to open files in the desktop IDE.
+
+    .DESCRIPTION
+        Prefers the `cursor` CLI on PATH (the form that opens the dedicated IDE
+        with `<file> --classic`). Falls back to Cursor.exe under Scoop,
+        LocalAppData, or Program Files. Does not use VS Code's `code`.
+
+    .OUTPUTS
+        String path to cursor.cmd / Cursor.exe, or $null if not found.
+    #>
+
+    $pathCmd = Get-Command cursor -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandType -eq 'Application' } |
+        Select-Object -First 1
+    if ($pathCmd -and $pathCmd.Source -and (Test-Path -LiteralPath $pathCmd.Source)) {
+        return $pathCmd.Source
+    }
+
+    $candidates = @()
+    if ($env:SCOOP) {
+        $candidates += (Join-Path $env:SCOOP 'apps\cursor\current\Cursor.exe')
+    }
+    $candidates += @(
+        'C:\AppInstall\scoop\apps\cursor\current\Cursor.exe',
+        (Join-Path $env:USERPROFILE 'scoop\apps\cursor\current\Cursor.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\cursor\Cursor.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Cursor\Cursor.exe'),
+        (Join-Path $env:LOCALAPPDATA 'cursor\Cursor.exe'),
+        (Join-Path $env:ProgramFiles 'Cursor\Cursor.exe')
+    )
+    $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    if ($programFilesX86) {
+        $candidates += (Join-Path $programFilesX86 'Cursor\Cursor.exe')
+    }
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Open-ConfigInEditor {
+    <#
+    .SYNOPSIS
+        Opens a file in the Cursor desktop IDE.
+
+    .DESCRIPTION
+        Shared launcher for Edit Configs, backup logs, and report files.
+        Matches the working CLI: `cursor <file> --classic` (file first, then
+        --classic; no -r). Fire-and-forget by default. Stdout/stderr are
+        redirected so Node deprecation warnings do not leak into the console.
+        Start failures are still reported. Does not write a boolean to the
+        host unless -PassThru is set.
+
+    .PARAMETER Path
+        File to open.
+
+    .PARAMETER Wait
+        If set, wait for the Cursor process to exit. Default is not to wait.
+
+    .PARAMETER PassThru
+        If set, return $true/$false so callers can branch. Default is no output.
+
+    .OUTPUTS
+        None, or Boolean when -PassThru is set.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [switch]$Wait,
+        [switch]$PassThru
+    )
+
+    $cursorCmd = Resolve-CursorEditor
+    if (-not $cursorCmd) {
+        Write-Host "Cursor was not found. Install Cursor and ensure the 'cursor' CLI is on PATH" -ForegroundColor Red
+        Write-Host "(or Cursor.exe under Scoop, AppData\\Programs\\cursor, or Program Files)." -ForegroundColor Red
+        Write-Host "VS Code's 'code' command is not used as a fallback." -ForegroundColor Yellow
+        Write-Host "File was not opened: $Path" -ForegroundColor Yellow
+        if ($PassThru) { return $false }
+        return
+    }
+
+    # Working CLI form: cursor <file> --classic (no -r; -r reuses the Agents window)
+    $argumentList = "`"$Path`" --classic"
+
+    $tempOut = [System.IO.Path]::GetTempFileName()
+    $tempErr = [System.IO.Path]::GetTempFileName()
+    $launched = $false
+    try {
+        $proc = Start-Process -FilePath $cursorCmd -ArgumentList $argumentList `
+            -RedirectStandardOutput $tempOut `
+            -RedirectStandardError $tempErr `
+            -PassThru
+        if (-not $proc) {
+            throw "Start-Process did not start Cursor"
+        }
+        if ($Wait) {
+            $proc.WaitForExit()
+            if ($proc.ExitCode -ne 0) {
+                Write-Host "Cursor exited with code $($proc.ExitCode)." -ForegroundColor Red
+                Write-Host "File was not opened: $Path" -ForegroundColor Yellow
+                $realErrors = Get-Content -LiteralPath $tempErr -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_ -and $_ -notmatch 'DeprecationWarning|punycode|trace-deprecation'
+                    }
+                foreach ($line in $realErrors) {
+                    Write-Host $line -ForegroundColor Red
+                }
+            } else {
+                $launched = $true
+            }
+        } else {
+            $launched = $true
+        }
+    } catch {
+        Write-Host "Failed to open Cursor: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "File was not opened: $Path" -ForegroundColor Yellow
+    } finally {
+        if ($Wait) {
+            Remove-Item -LiteralPath $tempOut, $tempErr -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($PassThru) {
+        return $launched
+    }
+}
 
 function Start-InteractivePing {
     param(
@@ -5020,18 +5154,18 @@ function Show-EditConfigsMenu {
     # Define edit configs submenu
     $defaultMenu = @(
         (New-MenuAction "PowerShell Profile" {
-            Invoke-Expression "code '$($script:Config.paths.profilePath)'"
+            Open-ConfigInEditor -Path $script:Config.paths.profilePath
             Invoke-StandardPause
         }),
         (New-MenuAction "Okta YAML" {
-            Invoke-Expression "code '$($script:Config.paths.oktaYamlPath)'"
+            Open-ConfigInEditor -Path $script:Config.paths.oktaYamlPath
             Invoke-StandardPause
         }),
         (New-MenuAction "VS Code Settings" {
-            # VS Code settings path (Scoop installation)
+            # VS Code settings path (Scoop installation) — still edit that file, but in Cursor
             $vscodeSettingsPath = "C:\AppInstall\scoop\persist\vscode\data\user-data\User\settings.json"
             if (Test-Path $vscodeSettingsPath) {
-                Invoke-Expression "code '$vscodeSettingsPath'"
+                Open-ConfigInEditor -Path $vscodeSettingsPath
             } else {
                 Write-Host "VS Code settings not found at: $vscodeSettingsPath" -ForegroundColor Yellow
             }
@@ -5318,7 +5452,7 @@ function Show-DeprecatedBackupFiles {
 
     Write-Host ""
     Write-Host "Options:" -ForegroundColor Cyan
-    Write-Host "  1. View full list in VS Code" -ForegroundColor White
+    Write-Host "  1. View full list in Cursor" -ForegroundColor White
     Write-Host "  2. Clean deprecated files (DELETE them from backup)" -ForegroundColor Red
     Write-Host "  3. Cancel" -ForegroundColor Gray
     Write-Host ""
@@ -5386,8 +5520,9 @@ function Show-DeprecatedBackupFiles {
             }
 
             Set-Content -Path $reportPath -Value $report
-            Invoke-Expression "code '$reportPath'"
-            Write-Host "✅ Report opened in VS Code" -ForegroundColor Green
+            if (Open-ConfigInEditor -Path $reportPath -PassThru) {
+                Write-Host "✅ Report opened in Cursor" -ForegroundColor Green
+            }
         }
         "2" {
             Write-Host ""
@@ -5647,7 +5782,7 @@ function Open-BackupDetailedLog {
     $detailedLog = Join-Path $scriptDir "backup-dev.log"
 
     if (Test-Path $detailedLog) {
-        Invoke-Expression "code '$detailedLog'"
+        Open-ConfigInEditor -Path $detailedLog
     } else {
         Write-Host "No detailed log found at: $detailedLog" -ForegroundColor Yellow
     }
@@ -5662,7 +5797,7 @@ function Open-BackupHistoryLog {
     $historyLog = Join-Path $scriptDir "backup-history.log"
 
     if (Test-Path $historyLog) {
-        Invoke-Expression "code '$historyLog'"
+        Open-ConfigInEditor -Path $historyLog
     } else {
         Write-Host "No history log found at: $historyLog" -ForegroundColor Yellow
     }

@@ -20,6 +20,26 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.1 (2026-08-24)
+
+**Changed:**
+- **Open config and log files in Cursor** — Menu items that previously launched VS Code
+  (`code`) now open files in Cursor IDE via a shared `Open-ConfigInEditor` helper.
+  Launches the `cursor` CLI as `cursor "<file>" --classic` (file first, then
+  `--classic`; no `-r`) so the file opens in the dedicated desktop IDE, not
+  Cursor Agents. Falls back to `Cursor.exe` with the same argument order if
+  the CLI is not on PATH. Stdout/stderr are redirected so Node `punycode`
+  warnings do not print in the console; start failures are still reported.
+  There is no silent fallback to VS Code's `code`.
+  - Edit Configs: PowerShell Profile, Okta YAML, VS Code Settings
+  - Backup Dev: detailed log, history log, deprecated-files report
+
+**Note:** If you customized the Edit Configs menu, reset that menu (or remove
+`menus."Edit Configs"` from config.json) so the new helper is used. Default and
+example menus are updated. `configVersion` is unchanged.
+
+---
+
 ### v1.22.0 (2026-03-10)
 
 **New Features:**
