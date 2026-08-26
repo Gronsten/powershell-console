@@ -52,9 +52,12 @@ This guide will walk you through setting up the PowerShell AWS Management Consol
    - Comes with Windows 11
    - Windows 10 users: Install from Microsoft Store ("App Installer")
 
-4. **VS Code** (Optional, for editing config files)
-   - Download: https://code.visualstudio.com/
-   - Used by "Edit PowerShell Profile" menu option
+4. **Cursor** (Optional, for viewing/editing config files)
+   - Download: https://cursor.com/
+   - Or Scoop: `scoop install cursor`
+   - Used by Edit Configs, backup log viewers, and deprecated-file reports
+   - The console runs `cursor <file> --classic` (PATH `cursor` CLI) so the dedicated IDE opens, not Cursor Agents
+   - The `code` CLI is not used as a fallback (it is often VS Code, not Cursor)
 
 ---
 
@@ -99,8 +102,8 @@ Ensure you have these files:
 Edit `config.json` with your preferred text editor:
 
 ```powershell
-# Using VS Code
-code config.json
+# Using Cursor
+cursor config.json
 
 # OR using Notepad
 notepad config.json
