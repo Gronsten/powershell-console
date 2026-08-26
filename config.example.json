@@ -202,7 +202,7 @@
       "usage": "This module is loaded via PowerShell profile, not console.ps1",
       "credentialsFile": "The module reads from your AWS credentials file (default: %USERPROFILE%\\.aws\\credentials)",
       "customPath": "If your AWS credentials file is in a non-standard location, you can modify the module to use a custom path",
-      "oktaIntegration": "Works with okta-aws-cli which updates the [default] profile in credentials file",
+      "oktaIntegration": "okta-aws-cli --profile writes a named section; console login syncs those keys onto [default] for AWS CLI / OpenTofu",
       "setup": "See modules/aws-prompt-indicator/README.md for complete setup instructions and PowerShell profile integration"
     }
   },

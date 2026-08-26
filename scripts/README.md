@@ -4,6 +4,14 @@ Utility scripts for PowerShell console operations.
 
 ## Available Scripts
 
+### AwsCredentialProfile.ps1
+
+Shared helpers (dot-sourced by `console.ps1`) that copy a named okta-aws-cli profile onto `[default]` so AWS CLI and OpenTofu work without `--profile`.
+
+After a successful console login, `Sync-AwsDefaultProfileFrom` updates `[default]` and removes a stale `x_security_token_expires` when the named profile has none.
+
+**Related tests:** `_test/Test-AwsCredentialProfile.ps1`
+
 ### aws-logout.ps1
 
 Clears AWS credentials from the `[default]` profile in `~/.aws/credentials`.

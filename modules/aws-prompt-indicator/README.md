@@ -358,7 +358,7 @@ If both current and expected accounts are found, the module compares them and sh
 
 ### Wrong Account Detected
 
-The module reads the `[default]` profile from `~/.aws/credentials`. If okta-aws-cli is writing to a different profile, you may need to adjust the module code or update your okta configuration.
+The module prefers `$env:AWS_PROFILE` when set. Otherwise it uses `[default]` unless that profile has a past `x_security_token_expires` value. Console login writes a named okta-aws-cli profile (for example `etsnettoolsprod-CFA-OKTA-PROD-Admin`) and copies it onto `[default]`. If the indicator still shows no session, check that `[default]` is not expired and that you are in a mapped directory.
 
 ### Performance Issues
 
