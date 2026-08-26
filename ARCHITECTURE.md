@@ -847,7 +847,8 @@ User Input (Account Selection)
                     ▼
 ┌───────────────────────────────────────────────┐
 │ ~/.aws/credentials                             │
-│   [default] profile updated                    │
+│   Named profile written by okta-aws-cli        │
+│   Synced onto [default] for CLI / OpenTofu     │
 └───────────────────┬───────────────────────────┘
                     │
                     ▼
@@ -855,13 +856,14 @@ User Input (Account Selection)
 │ Global State Variables                         │
 │   $global:currentAwsProfile                    │
 │   $global:currentAwsEnvironment                │
+│   $env:AWS_PROFILE                             │
 └───────────────────┬───────────────────────────┘
                     │
                     ▼
 ┌───────────────────────────────────────────────┐
 │ AWS CLI Operations                             │
-│   All subsequent aws commands use [default]    │
-│   profile automatically                        │
+│   Console commands use --profile <named>       │
+│   Bare aws / tofu use [default] (now synced)   │
 └───────────────────────────────────────────────┘
 ```
 
@@ -1262,9 +1264,9 @@ gh release create v1.10.0 \
 
 ### Understanding Error Messages
 
-**"RequestExpired" from AWS CLI**:
-- AWS credentials have expired
-- Solution: Re-authenticate via "Change AWS Account"
+**"RequestExpired" / "ExpiredToken" from AWS CLI or OpenTofu**:
+- Bare `aws` / `tofu` use `[default]`. Console login writes a named okta-aws-cli profile and (v1.22.1+) copies it onto `[default]`.
+- If console instance commands work but CLI fails, `[default]` is stale. Re-authenticate via the console, or set `$env:AWS_PROFILE` to the named profile (for example `etsnettoolsprod-CFA-OKTA-PROD-Admin`).
 
 **"InvalidInstanceID" from AWS SSM**:
 - Instance ID not found or incorrect region

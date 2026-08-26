@@ -29,6 +29,7 @@ $script:ProfileToAccountMap = @{}
 $script:Config = $null
 $script:CachedAccountId = $null
 $script:CredentialsFileLastModified = $null
+$script:CachedProfileKey = $null
 
 <#
 .SYNOPSIS
@@ -86,6 +87,16 @@ function Initialize-AwsPromptIndicator {
                         $altName = "$prefix-$middle$suffix"
                         $script:ProfileToAccountMap[$altName] = $envConfig.accountId
                     }
+
+                    # Map role-specific okta-aws-cli profile names
+                    # Example: "etsnettoolsprod-CFA-OKTA-PROD-Admin"
+                    if ($envConfig.PSObject.Properties['oktaProfileMap'] -and $envConfig.oktaProfileMap) {
+                        $envConfig.oktaProfileMap.PSObject.Properties | ForEach-Object {
+                            if ($_.Value) {
+                                $script:ProfileToAccountMap[$_.Value] = $envConfig.accountId
+                            }
+                        }
+                    }
                 }
             }
             Write-Verbose "Loaded $($script:ProfileToAccountMap.Count) profile-to-account mappings"
@@ -95,6 +106,45 @@ function Initialize-AwsPromptIndicator {
     }
     catch {
         Write-Warning "Failed to load config: $_"
+        return $false
+    }
+}
+
+<#
+.SYNOPSIS
+    Returns $true when a credentials-file profile has a past x_security_token_expires value.
+#>
+function Test-AwsCredentialsProfileExpired {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CredentialsText,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ProfileName
+    )
+
+    $pattern = "(?ms)^\[$([regex]::Escape($ProfileName))\](.*?)(?=^\[|\z)"
+    $section = [regex]::Match($CredentialsText, $pattern)
+    if (-not $section.Success) {
+        return $false
+    }
+
+    if ($section.Groups[1].Value -notmatch '(?im)^\s*x_security_token_expires\s*=\s*(.+?)\s*$') {
+        return $false
+    }
+
+    $raw = $Matches[1].Trim()
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return $false
+    }
+
+    try {
+        $expires = [datetime]::Parse($raw, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal)
+        return $expires.ToUniversalTime() -lt [datetime]::UtcNow
+    }
+    catch {
         return $false
     }
 }
@@ -125,6 +175,7 @@ function Get-CurrentAwsAccountId {
         Write-Verbose "AWS credentials file not found: $script:AwsCredentialsPath"
         $script:CachedAccountId = $null
         $script:CredentialsFileLastModified = $null
+        $script:CachedProfileKey = $null
         return $null
     }
 
@@ -132,9 +183,10 @@ function Get-CurrentAwsAccountId {
         # Check if credentials file has been modified since last read
         $fileInfo = Get-Item $script:AwsCredentialsPath
         $currentLastModified = $fileInfo.LastWriteTime
+        $profileKey = [string]$env:AWS_PROFILE
 
-        # Use cached value if file hasn't changed (cache both valid and null results)
-        if ($script:CredentialsFileLastModified -eq $currentLastModified) {
+        # Use cached value if file and AWS_PROFILE haven't changed (cache both valid and null results)
+        if ($script:CredentialsFileLastModified -eq $currentLastModified -and $script:CachedProfileKey -eq $profileKey) {
             Write-Verbose "Using cached account ID: $script:CachedAccountId (file unchanged)"
             return $script:CachedAccountId
         }
@@ -150,28 +202,51 @@ function Get-CurrentAwsAccountId {
             Write-Verbose "No profiles found in credentials file"
             $script:CachedAccountId = $null
             $script:CredentialsFileLastModified = $currentLastModified
+            $script:CachedProfileKey = $profileKey
             return $null
         }
 
-        # Prefer [default] profile if it exists (okta-aws-cli writes here)
-        # Otherwise use the last profile in the file
-        $activeProfile = if ($profiles -contains "default") {
-            Write-Verbose "Using [default] profile (okta-aws-cli standard)"
-            "default"
-        } else {
-            Write-Verbose "No [default] profile, using last profile in file"
-            $profiles[-1]
+        # Prefer AWS_PROFILE when set (console login exports it). Otherwise use
+        # [default] only if it is not marked expired. Stale [default] keys are
+        # common because okta-aws-cli --profile writes a named section.
+        $activeProfile = $null
+        if ($env:AWS_PROFILE -and ($profiles -contains $env:AWS_PROFILE)) {
+            Write-Verbose "Using AWS_PROFILE environment profile: $($env:AWS_PROFILE)"
+            $activeProfile = $env:AWS_PROFILE
         }
+        elseif ($profiles -contains "default") {
+            $defaultExpired = Test-AwsCredentialsProfileExpired -CredentialsText $credContent -ProfileName "default"
+            if ($defaultExpired) {
+                Write-Verbose "[default] profile is expired; not treating it as the active session"
+            }
+            else {
+                Write-Verbose "Using [default] profile"
+                $activeProfile = "default"
+            }
+        }
+
+        if (-not $activeProfile) {
+            Write-Verbose "No usable active AWS profile"
+            $script:CachedAccountId = $null
+            $script:CredentialsFileLastModified = $currentLastModified
+            $script:CachedProfileKey = $profileKey
+            return $null
+        }
+
         Write-Verbose "Active profile from credentials file: $activeProfile"
 
         # Try to map profile name to account ID
         $accountId = $script:ProfileToAccountMap[$activeProfile]
 
         # If profile name doesn't map, try AWS CLI as fallback (e.g., for [default] profile)
-        if (-not $accountId -and $activeProfile -eq "default") {
+        if (-not $accountId) {
             Write-Verbose "Profile '$activeProfile' has no mapping, using AWS CLI fallback"
             try {
-                $identityJson = aws sts get-caller-identity 2>$null
+                $stsArgs = @("sts", "get-caller-identity")
+                if ($activeProfile -ne "default") {
+                    $stsArgs += @("--profile", $activeProfile)
+                }
+                $identityJson = & aws @stsArgs 2>$null
                 if ($LASTEXITCODE -eq 0 -and $identityJson) {
                     $identity = $identityJson | ConvertFrom-Json
                     $accountId = $identity.Account
@@ -189,12 +264,14 @@ function Get-CurrentAwsAccountId {
             Write-Verbose "Final account ID: $accountId"
             $script:CachedAccountId = $accountId
             $script:CredentialsFileLastModified = $currentLastModified
+            $script:CachedProfileKey = $profileKey
             return $accountId
         }
         else {
             Write-Verbose "No account ID determined for profile: $activeProfile"
             $script:CachedAccountId = $null
             $script:CredentialsFileLastModified = $currentLastModified
+            $script:CachedProfileKey = $profileKey
             return $null
         }
     }

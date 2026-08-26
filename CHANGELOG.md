@@ -38,6 +38,26 @@ All notable changes to this project have been documented during development.
 `menus."Edit Configs"` from config.json) so the new helper is used. Default and
 example menus are updated. `configVersion` is unchanged.
 
+**Bug Fixes:**
+- **AWS login: CLI / OpenTofu saw expired tokens after a successful console login** —
+  `okta-aws-cli web --profile <named>` writes a named section (for example
+  `etsnettoolsprod-CFA-OKTA-PROD-Admin`). Console commands pass `--profile`, so they
+  work, but `aws` and `tofu` in a regular shell use `[default]`, which could still
+  hold a months-old session. After a successful login the console now copies the
+  named profile onto `[default]` and sets `AWS_PROFILE` for that session.
+- **AWS Prompt Indicator showed "enabled" but no AWS segment** — The module always
+  preferred `[default]` and then called `sts get-caller-identity` when that profile
+  was expired, so it reported "no session" even in a mapped terraform directory.
+  It now skips an expired `[default]`, honors `AWS_PROFILE`, and maps
+  `oktaProfileMap` names (for example `etsnettoolsprod-CFA-OKTA-PROD-Admin`) to
+  account IDs.
+
+**Files Changed:**
+- `console.ps1` — sync named profile to `[default]` after Okta login
+- `scripts/AwsCredentialProfile.ps1` — INI copy helper (new)
+- `modules/aws-prompt-indicator/AwsPromptIndicator.psm1` — expired-default / `AWS_PROFILE` detection
+- `_test/Test-AwsCredentialProfile.ps1` — local INI sync regression tests (gitignored `_test/`)
+
 ---
 
 ### v1.22.0 (2026-03-10)

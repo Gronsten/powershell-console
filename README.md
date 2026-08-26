@@ -22,6 +22,7 @@ A comprehensive, interactive PowerShell management console for AWS infrastructur
 - **Multi-Account Support**: Seamlessly switch between multiple AWS accounts and regions
 - **Multi-Role Authentication**: Support for multiple IAM roles per account with preferred role selection
 - **Okta SSO Integration**: Automated authentication using okta-aws-cli with configurable session durations
+- **CLI / OpenTofu session sync**: After login, the named okta-aws-cli profile is copied onto `[default]` so `aws` and `tofu` work without `--profile`
 - **Account Synchronization**: One-click sync to discover all AWS accounts and roles from Okta
 - **Persistent Configuration**: Customizable menu order and display names saved to config.json
 - **AWS Logout Script**: Clean logout from okta-aws-cli sessions

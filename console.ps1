@@ -134,6 +134,12 @@ Write-Host "PowerShell Console " -ForegroundColor Cyan -NoNewline
 Write-Host "v$script:ConsoleVersion" -ForegroundColor Gray
 Write-Host ""
 
+# Shared AWS credentials INI helpers (named-profile → [default] sync)
+$script:AwsCredentialProfileScript = Join-Path $PSScriptRoot "scripts\AwsCredentialProfile.ps1"
+if (Test-Path $script:AwsCredentialProfileScript) {
+    . $script:AwsCredentialProfileScript
+}
+
 # Function to restore console state on exit
 function Restore-ConsoleState {
     # Restore original encoding settings
@@ -5965,6 +5971,22 @@ function Invoke-AwsAuthentication {
         $global:currentAwsEnvironment = $Environment
         $global:currentAwsRegion = $Region
         $global:currentAwsProfile = if ($ProfileName) { $ProfileName } else { $Environment }
+
+        # okta-aws-cli --profile writes a named section, not [default]. CLI and
+        # OpenTofu use [default] unless AWS_PROFILE is set, so copy the fresh keys.
+        if ($global:currentAwsProfile -and $global:currentAwsProfile -ne "manual") {
+            try {
+                if (Get-Command Sync-AwsDefaultProfileFrom -ErrorAction SilentlyContinue) {
+                    Sync-AwsDefaultProfileFrom -SourceProfile $global:currentAwsProfile | Out-Null
+                }
+                $env:AWS_PROFILE = $global:currentAwsProfile
+            }
+            catch {
+                Write-Host "Warning: Could not sync [$($global:currentAwsProfile)] to [default]: $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "Console commands will still use --profile. For CLI/OpenTofu run:" -ForegroundColor Yellow
+                Write-Host "  `$env:AWS_PROFILE = '$($global:currentAwsProfile)'" -ForegroundColor Gray
+            }
+        }
 
         # For manual login, try to get account info
         if ($Environment -eq "manual") {
