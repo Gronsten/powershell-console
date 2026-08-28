@@ -20,6 +20,36 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.2 (2026-08-28)
+
+**Bug Fixes:**
+- **Pip dependency check missed exact-pin (`==`) constraints** — During "Manage Updates," the
+  pip section uses `pipdeptree` to skip offering an update for a package if some other
+  installed package constrains it, but the actual break check only matched upper-bound (`<`)
+  constraints. A package pinned with an exact `==` constraint (for example `nab-python`
+  requiring `nab-index==0.0.13`) was recorded but never blocked, so the console would offer
+  (and let you accept) an update that pip's own resolver would immediately flag as a conflict
+  afterward.
+- **Dependency check missed updates that cascade through an unconstrained package** — The
+  check above only looked at whether the *selected* package itself was directly pinned by
+  something else. Updating an unconstrained package (for example `nab-project`) can still
+  drag its own sub-dependencies to new versions (`nab-index`, `nab-resolver`) that violate a
+  third package's pin (`nab-python==0.0.13`), because pip resolves the whole transaction, not
+  just the named package. The install step now runs `pip install --dry-run` first, checks
+  every package the transaction would actually touch against known constraints, and skips
+  the install (with a reason) if any would be violated — except constraints from a package
+  that's being upgraded in the same transaction, since that package's own new version
+  supersedes its old pin.
+- Both checks now do real version-range comparison (`<`, `<=`, `>=`, `>`, `==`, `!=`) instead
+  of treating the mere presence of a constraint as an automatic block, which previously could
+  false-positive on any package with an unrelated, already-satisfied upper bound somewhere in
+  its dependency chain (for example blocking a safe `urllib3` update solely because `requests`
+  pins `urllib3<3`).
+
+**Files Changed:**
+- `console.ps1` — dependency-constraint check now does real version comparison, and the
+  install step re-checks the actual dry-run result for cascading violations
+
 ### v1.22.1 (2026-08-24)
 
 **Changed:**

@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.22.1"
+$script:ConsoleVersion = "1.22.2"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -1012,6 +1012,54 @@ function Select-PackagesToUpdate {
     # Collect available updates
     $availableUpdates = @()
 
+    # Map of package name -> list of {Parent, Constraint} for pip packages that another
+    # installed package pins via < or ==. Populated during the pip check below (if
+    # pipdeptree is available) and consulted again at install time, since an update can
+    # pull in a constrained sub-dependency even when the selected package itself isn't
+    # directly constrained (e.g. updating nab-project drags nab-index/nab-resolver along).
+    $constrainedPackages = @{}
+
+    # Small PEP 440-ish comparer (numeric dotted segments only; pre/post/dev release
+    # qualifiers are ignored) used to check a candidate version against a pip constraint
+    # string like "<3", "==0.0.13", or ">=1.26,<3". Good enough to tell a real conflict
+    # apart from a constraint the candidate version already satisfies.
+    function Test-PipVersionSatisfiesConstraint {
+        param([string]$Version, [string]$ConstraintExpr)
+
+        function Get-NormalizedVersion([string]$v) {
+            if ($v -match '^\s*(\d+(?:\.\d+)*)') {
+                $parts = @($Matches[1] -split '\.')
+                while ($parts.Count -lt 4) { $parts += '0' }
+                return [version]("{0}.{1}.{2}.{3}" -f $parts[0], $parts[1], $parts[2], $parts[3])
+            }
+            return $null
+        }
+
+        $targetVer = Get-NormalizedVersion $Version
+        if (-not $targetVer) { return $true }
+
+        foreach ($clause in ($ConstraintExpr -split ',')) {
+            $clause = $clause.Trim()
+            if ($clause -notmatch '^(==|!=|<=|>=|<|>|~=)\s*(.+)$') { continue }
+            $op = $Matches[1]
+            $clauseVer = Get-NormalizedVersion $Matches[2].Trim()
+            if (-not $clauseVer) { continue }
+
+            $satisfied = switch ($op) {
+                '==' { $targetVer -eq $clauseVer }
+                '!=' { $targetVer -ne $clauseVer }
+                '<=' { $targetVer -le $clauseVer }
+                '>=' { $targetVer -ge $clauseVer }
+                '<'  { $targetVer -lt $clauseVer }
+                '>'  { $targetVer -gt $clauseVer }
+                '~=' { $targetVer -ge $clauseVer } # approximation: ~= also implies a same-prefix upper bound, not checked here
+                default { $true }
+            }
+            if (-not $satisfied) { return $false }
+        }
+        return $true
+    }
+
     # Check Scoop
     Write-Host "Checking Scoop for updates..." -ForegroundColor Gray
     try {
@@ -1261,7 +1309,6 @@ function Select-PackagesToUpdate {
                         $depTree = pipdeptree --json 2>&1 | ConvertFrom-Json
 
                         # Build a map of packages that are dependencies with version constraints
-                        $constrainedPackages = @{}
                         foreach ($pkg in $depTree) {
                             foreach ($dep in $pkg.dependencies) {
                                 $depName = $dep.package_name.ToLower()
@@ -1291,9 +1338,8 @@ function Select-PackagesToUpdate {
                                     $wouldBreak = $false
 
                                     foreach ($constraint in $constraints) {
-                                        # Simple check: if there's a < constraint, the update might break it
-                                        if ($constraint.Constraint -match '<') {
-                                            Write-Host "    ⚠️  Skipping $($update.Name): constrained by $($constraint.Parent) ($($constraint.Constraint))" -ForegroundColor Yellow
+                                        if (-not (Test-PipVersionSatisfiesConstraint -Version $update.NewVersion -ConstraintExpr $constraint.Constraint)) {
+                                            Write-Host "    ⚠️  Skipping $($update.Name): $($update.NewVersion) would violate $($constraint.Parent)'s constraint ($($constraint.Constraint))" -ForegroundColor Yellow
                                             $wouldBreak = $true
                                             break
                                         }
@@ -1457,10 +1503,57 @@ function Select-PackagesToUpdate {
                 # pip itself requires special update command
                 if ($pkg.Name -eq "pip") {
                     python.exe -m pip install --upgrade pip
+                    Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
                 } else {
-                    pip install --upgrade --upgrade-strategy only-if-needed $pkg.Name
+                    # Dry-run first: updating $pkg.Name can drag its own sub-dependencies to
+                    # versions that violate a DIFFERENT installed package's < or == constraint,
+                    # even when $pkg.Name itself isn't directly constrained (e.g. updating
+                    # nab-project pulls nab-index/nab-resolver past nab-python's ==0.0.13 pin).
+                    $dryRunOutput = pip install --upgrade --upgrade-strategy only-if-needed $pkg.Name --dry-run 2>&1 | Out-String
+                    $wouldInstallLine = ($dryRunOutput -split "`r?`n") | Where-Object { $_ -match '^Would install ' } | Select-Object -First 1
+
+                    $blockReason = $null
+                    if ($wouldInstallLine) {
+                        $entries = ($wouldInstallLine -replace '^Would install ', '').Trim() -split '\s+'
+
+                        # Names of every package this single install would touch. A constraint
+                        # whose Parent is in this set is stale — that parent is being upgraded
+                        # in the same transaction, so its old requirement no longer applies
+                        # (e.g. nab-project's own ==0.0.15 pin on nab-index doesn't block a
+                        # cascade update that upgrades nab-project and nab-index together).
+                        $entryNamesInThisInstall = @{}
+                        foreach ($entry in $entries) {
+                            if ($entry -match '^(?<name>.+)-(?<version>\d.*)$') {
+                                $entryNamesInThisInstall[$Matches['name'].ToLower()] = $true
+                            }
+                        }
+
+                        foreach ($entry in $entries) {
+                            if ($entry -notmatch '^(?<name>.+)-(?<version>\d.*)$') { continue }
+                            $entryName = $Matches['name'].ToLower()
+                            $entryVersion = $Matches['version']
+
+                            if (-not $constrainedPackages.ContainsKey($entryName)) { continue }
+
+                            foreach ($constraint in $constrainedPackages[$entryName]) {
+                                if ($entryNamesInThisInstall.ContainsKey($constraint.Parent.ToLower())) { continue }
+
+                                if (-not (Test-PipVersionSatisfiesConstraint -Version $entryVersion -ConstraintExpr $constraint.Constraint)) {
+                                    $blockReason = "would install $entryName $entryVersion, but $($constraint.Parent) requires $($constraint.Constraint)"
+                                    break
+                                }
+                            }
+                            if ($blockReason) { break }
+                        }
+                    }
+
+                    if ($blockReason) {
+                        Write-Host "  ⚠️  Skipped $($pkg.Name): $blockReason" -ForegroundColor Yellow
+                    } else {
+                        pip install --upgrade --upgrade-strategy only-if-needed $pkg.Name
+                        Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
+                    }
                 }
-                Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
             }
         } catch {
             Write-Host "  ❌ Error updating $($pkg.Name): $_" -ForegroundColor Red
