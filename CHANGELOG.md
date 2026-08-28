@@ -20,6 +20,20 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.2 (2026-08-28)
+
+**Bug Fixes:**
+- **Pip dependency check missed exact-pin (`==`) constraints** — During "Manage Updates," the
+  pip section uses `pipdeptree` to skip offering an update for a package if some other
+  installed package constrains it, but the actual break check only matched upper-bound (`<`)
+  constraints. A package pinned with an exact `==` constraint (for example `nab-python`
+  requiring `nab-index==0.0.13`) was recorded but never blocked, so the console would offer
+  (and let you accept) an update that pip's own resolver would immediately flag as a conflict
+  afterward. The break check now also matches `==` constraints.
+
+**Files Changed:**
+- `console.ps1` — dependency-constraint check now blocks on `==` in addition to `<`
+
 ### v1.22.1 (2026-08-24)
 
 **Changed:**

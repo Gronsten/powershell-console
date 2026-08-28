@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.22.1"
+$script:ConsoleVersion = "1.22.2"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -1291,8 +1291,8 @@ function Select-PackagesToUpdate {
                                     $wouldBreak = $false
 
                                     foreach ($constraint in $constraints) {
-                                        # Simple check: if there's a < constraint, the update might break it
-                                        if ($constraint.Constraint -match '<') {
+                                        # Simple check: an upper-bound (<) or exact pin (==) constraint means the update could break it
+                                        if ($constraint.Constraint -match '<' -or $constraint.Constraint -match '==') {
                                             Write-Host "    ⚠️  Skipping $($update.Name): constrained by $($constraint.Parent) ($($constraint.Constraint))" -ForegroundColor Yellow
                                             $wouldBreak = $true
                                             break
