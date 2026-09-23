@@ -133,7 +133,7 @@ A comprehensive, interactive PowerShell management console for AWS infrastructur
 
 ## Prerequisites
 
-- **PowerShell 5.1+** (Windows PowerShell) or **PowerShell 7+** (PowerShell Core)
+- **PowerShell 7+ (`pwsh`)** — required; Windows PowerShell 5.1 is not supported (see ARCHITECTURE.md KDD-001)
 - **AWS CLI** v2 installed and configured
 - **okta-aws-cli** installed for Okta authentication
 - **AWS Systems Manager Session Manager Plugin** for SSM connections

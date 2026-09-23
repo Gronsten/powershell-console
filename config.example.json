@@ -313,7 +313,11 @@
     }
   },
   "packageManager": {
-    "lastSearchScope": "installed"
+    "lastSearchScope": "installed",
+    "wingetUnelevatedUpgradeIds": [
+      "spacelift-io.spacectl"
+    ],
+    "wingetUnelevatedShell": "pwsh"
   },
-  "configVersion": "config.15"
+  "configVersion": "config.16"
 }

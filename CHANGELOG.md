@@ -20,6 +20,44 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.3 (2026-09-23)
+
+**Bug Fixes:**
+- **npm Manage Updates: false success on failed install** — Global npm upgrades now check
+  `$LASTEXITCODE` after `npm install -g` instead of always printing success.
+- **npm Manage Updates: corporate registry mirror gaps** — After `npm outdated`, each npm
+  candidate is validated with `npm install -g … --dry-run` against the configured registry
+  (e.g. JFrog). Updates that would fail on missing transitive versions (such as
+  `yauzl@^3.4.0` for `@vscode/vsce`) appear gray and unselectable with the missing spec
+  called out in the row text.
+- **winget: spacectl upgrade from elevated console** — Portable packages that cannot install
+  under an admin token (notably `spacelift-io.spacectl`) upgrade via de-elevated
+  a **limited (non-admin) scheduled task** that opens **pwsh** or **bash** (config:
+  `packageManager.wingetUnelevatedShell`, default `pwsh`) when the console is elevated — no
+  `runas.exe`. Output is logged and replayed in the main console; the helper window stays
+  open until you press Enter (success or failure). The main console waits for that before
+  continuing. Falls back to `Start-Process` if the task cannot be registered.
+
+**Changed:**
+- **Runtime: PowerShell 7+ only (KDD-001)** — Documented in ARCHITECTURE.md; no Windows
+  PowerShell 5.1 compatibility target.
+- **Global npm package search metadata** — Batch metadata fetch uses `npm view` (honors
+  `npm config get registry` and auth) instead of unauthenticated
+  `registry.npmjs.org` REST calls. The local `resources/npm-packages.json` name list is
+  unchanged.
+- **pip Manage Updates** — Dependency dry-run runs at scan time; blocked updates stay in
+  the list as gray, unselectable rows with the block reason appended (not hidden).
+
+**Config Changes:**
+- Added `packageManager.wingetUnelevatedUpgradeIds` (string array) — Winget IDs that require
+  a non-elevated upgrade shell; defaults to `spacelift-io.spacectl` when omitted.
+- Added `packageManager.wingetUnelevatedShell` (string) — `"pwsh"` (default) or `"bash"` for
+  the de-elevated winget helper window when the console is elevated.
+
+**Files Changed:**
+- `console.ps1` — npm registry validation, pip/npm unselectable rows, winget de-elevation
+- `config.example.json` — new `packageManager` keys, `config.16`
+
 ### v1.22.2 (2026-08-28)
 
 **Bug Fixes:**

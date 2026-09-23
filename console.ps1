@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.22.2"
+$script:ConsoleVersion = "1.22.3"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -516,6 +516,315 @@ function Get-NpmInstallInfo {
     return $result
 }
 
+function Test-NpmGlobalUpgradeResolvable {
+    <#
+    .SYNOPSIS
+    Dry-runs a global npm install to detect registry gaps (e.g. latest on npmjs not mirrored in JFrog).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$NewVersion
+    )
+
+    $spec = "${PackageName}@${NewVersion}"
+    $output = npm install -g $spec --dry-run 2>&1 | Out-String
+
+    if ($LASTEXITCODE -ne 0 -or $output -match 'npm error code ETARGET|No matching version found') {
+        $reason = 'dependency version not available in configured npm registry'
+        if ($output -match 'No matching version found for ([^\r\n]+)\.') {
+            $reason = "missing in registry: $($Matches[1])"
+        }
+        return @{ Ok = $false; Reason = $reason }
+    }
+
+    return @{ Ok = $true; Reason = $null }
+}
+
+function Test-IsElevatedAdmin {
+    [CmdletBinding()]
+    param()
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-WingetUnelevatedUpgradeIds {
+    <#
+    .SYNOPSIS
+    Winget package IDs that must be upgraded from a non-elevated shell (portable / elevationProhibited).
+    #>
+    [CmdletBinding()]
+    param()
+
+    $defaults = @('spacelift-io.spacectl')
+    if ($script:Config.PSObject.Properties['packageManager'] -and
+        $script:Config.packageManager.PSObject.Properties['wingetUnelevatedUpgradeIds']) {
+        $configured = @($script:Config.packageManager.wingetUnelevatedUpgradeIds)
+        if ($configured.Count -gt 0) {
+            return $configured
+        }
+    }
+    return $defaults
+}
+
+function Get-WingetUnelevatedShell {
+    <#
+    .SYNOPSIS
+    Shell used to run winget from a separate window when the console is elevated.
+    Config: packageManager.wingetUnelevatedShell - "pwsh" (default), "bash", or full path.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $shellSetting = 'pwsh'
+    if ($script:Config.PSObject.Properties['packageManager'] -and
+        $script:Config.packageManager.PSObject.Properties['wingetUnelevatedShell']) {
+        $shellSetting = [string]$script:Config.packageManager.wingetUnelevatedShell
+    }
+
+    $normalized = $shellSetting.Trim().ToLowerInvariant()
+    if ($normalized -in @('bash', 'git-bash')) {
+        $candidates = @(
+            'C:\AppInstall\scoop\apps\git\current\bin\bash.exe'
+            (Get-Command bash -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+        ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+        if ($candidates.Count -eq 0) {
+            throw "bash not found (set packageManager.wingetUnelevatedShell to pwsh or a full bash.exe path)"
+        }
+        return @{ Type = 'bash'; Path = $candidates[0] }
+    }
+
+    if ($normalized -eq 'pwsh') {
+        $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+        if (-not $pwshPath) {
+            $pwshPath = (Get-Command powershell -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+        }
+        if (-not $pwshPath) {
+            throw 'PowerShell (pwsh or powershell) not found on PATH'
+        }
+        return @{ Type = 'pwsh'; Path = $pwshPath }
+    }
+
+    if (Test-Path -LiteralPath $shellSetting) {
+        $type = if ($shellSetting -match 'bash(\.exe)?$') { 'bash' } else { 'pwsh' }
+        return @{ Type = $type; Path = $shellSetting }
+    }
+
+    throw "Invalid packageManager.wingetUnelevatedShell: $shellSetting"
+}
+
+function Write-WingetUnelevatedRunnerScripts {
+    param(
+        [string]$PackageId,
+        [string]$WingetPath,
+        [string]$LogFile,
+        [string]$ExitFile,
+        [string]$RunnerPs1,
+        [string]$RunnerSh
+    )
+
+    $logLiteral = $LogFile.Replace("'", "''")
+    $exitLiteral = $ExitFile.Replace("'", "''")
+    $wingetLiteral = $WingetPath.Replace("'", "''")
+    $pkgLiteral = $PackageId.Replace("'", "''")
+    $logBash = ($LogFile -replace '\\', '/')
+    $exitBash = ($ExitFile -replace '\\', '/')
+    $wingetBash = ($WingetPath -replace '\\', '/')
+
+    # Line array (no here-strings) for Windows PowerShell 5.1 parser compatibility.
+    $ps1Lines = @(
+        '$ErrorActionPreference = ''Continue'''
+        ('$logFile = ''{0}''' -f $logLiteral)
+        ('$exitFile = ''{0}''' -f $exitLiteral)
+        ('$winget = ''{0}''' -f $wingetLiteral)
+        'Write-Host ''Running winget upgrade as standard user (separate PowerShell window)...'' -ForegroundColor Cyan'
+        'Write-Host (''Log file: '' + $logFile)'
+        'Write-Host '''''
+        ('& $winget upgrade --id ''{0}'' --accept-package-agreements --accept-source-agreements --disable-interactivity *>&1 | Tee-Object -FilePath $logFile' -f $pkgLiteral)
+        '$ec = $LASTEXITCODE'
+        'Write-Host '''''
+        'Write-Host (''Exit code: '' + $ec)'
+        'if ($ec -eq 0) {'
+        '    Read-Host ''Upgrade finished. Press Enter to close this window'''
+        '} else {'
+        '    Read-Host ''Upgrade failed. Press Enter to close this window'''
+        '}'
+        'Set-Content -LiteralPath $exitFile -Value $ec -Encoding ASCII -NoNewline'
+        'exit $ec'
+    )
+    Set-Content -LiteralPath $RunnerPs1 -Value $ps1Lines -Encoding UTF8
+
+    $shLines = @(
+        '#!/usr/bin/env bash'
+        'set +e'
+        ('LOG=''{0}''' -f $logBash)
+        ('EXIT=''{0}''' -f $exitBash)
+        ('WINGET=''{0}''' -f $wingetBash)
+        'echo "Running winget upgrade as standard user (separate bash window)..."'
+        'echo "Log file: $LOG"'
+        'echo'
+        ('"$WINGET" upgrade --id ''{0}'' --accept-package-agreements --accept-source-agreements --disable-interactivity > "$LOG" 2>&1' -f $pkgLiteral)
+        'ec=$?'
+        'cat "$LOG"'
+        'echo'
+        'echo "Exit code: $ec"'
+        'if [ "$ec" -eq 0 ]; then'
+        '  read -r -p ''Upgrade finished. Press Enter to close this window '''
+        'else'
+        '  read -r -p ''Upgrade failed. Press Enter to close this window '''
+        'fi'
+        'printf ''%s'' "$ec" > "$EXIT"'
+        'exit "$ec"'
+    )
+    Set-Content -LiteralPath $RunnerSh -Value $shLines -Encoding UTF8
+}
+
+function Invoke-WingetUpgradeViaLimitedScheduledTask {
+    param(
+        [string]$TaskName,
+        [string]$Executable,
+        [string]$Arguments
+    )
+
+    $action = New-ScheduledTaskAction -Execute $Executable -Argument $Arguments
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId "$env:USERDOMAIN\$env:USERNAME" `
+        -LogonType Interactive `
+        -RunLevel Limited
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Force | Out-Null
+    try {
+        Start-ScheduledTask -TaskName $TaskName | Out-Null
+    }
+    catch {
+        throw "Scheduled task could not start: $_"
+    }
+}
+
+function Invoke-WingetPackageUpgrade {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageId
+    )
+
+    $wingetArgs = @(
+        'upgrade', '--id', $PackageId,
+        '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity'
+    )
+
+    $unelevatedIds = Get-WingetUnelevatedUpgradeIds
+    if (($unelevatedIds -contains $PackageId) -and (Test-IsElevatedAdmin)) {
+        Write-Host "  → Running winget as standard user (required for $PackageId)..." -ForegroundColor Gray
+        Write-Host "  → Opens a separate shell window (no runas); press Enter there when done." -ForegroundColor DarkGray
+
+        $wingetPath = (Get-Command winget -ErrorAction Stop).Source
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $safeId = ($PackageId -replace '[^\w\-]', '_')
+        $logFile = Join-Path $env:TEMP "powershell-console-winget-$safeId-$stamp.log"
+        $exitFile = Join-Path $env:TEMP "powershell-console-winget-$safeId-$stamp.exitcode"
+        $runnerPs1 = Join-Path $env:TEMP "powershell-console-winget-$safeId-$stamp.ps1"
+        $runnerSh = Join-Path $env:TEMP "powershell-console-winget-$safeId-$stamp.sh"
+        $taskName = "powershell-console-winget-$safeId-$stamp"
+
+        if (Test-Path -LiteralPath $exitFile) { Remove-Item -LiteralPath $exitFile -Force }
+        Write-WingetUnelevatedRunnerScripts -PackageId $PackageId -WingetPath $wingetPath `
+            -LogFile $logFile -ExitFile $exitFile -RunnerPs1 $runnerPs1 -RunnerSh $runnerSh
+
+        $shell = Get-WingetUnelevatedShell
+        Write-Host "  → Shell: $($shell.Path)" -ForegroundColor DarkGray
+
+        $taskStarted = $false
+        $proc = $null
+        try {
+            if ($shell.Type -eq 'bash') {
+                $taskArgs = "`"$runnerSh`""
+                $startArgs = @($runnerSh)
+            }
+            else {
+                $taskArgs = "-NoProfile -NoLogo -ExecutionPolicy Bypass -File `"$runnerPs1`""
+                $startArgs = @('-NoProfile', '-NoLogo', '-ExecutionPolicy', 'Bypass', '-File', $runnerPs1)
+            }
+
+            try {
+                Invoke-WingetUpgradeViaLimitedScheduledTask -TaskName $taskName `
+                    -Executable $shell.Path -Arguments $taskArgs
+                $taskStarted = $true
+                Write-Host "  → Started via scheduled task (limited / non-admin token)." -ForegroundColor DarkGray
+            }
+            catch {
+                Write-Host "  ⚠️  Limited scheduled task unavailable: $_" -ForegroundColor Yellow
+                Write-Host "  → Falling back to Start-Process (window may still be elevated)." -ForegroundColor Yellow
+                $proc = Start-Process -FilePath $shell.Path -ArgumentList $startArgs `
+                    -Wait -PassThru -WindowStyle Normal
+            }
+
+            if ($taskStarted) {
+                $deadline = [datetime]::UtcNow.AddMinutes(15)
+                while ([datetime]::UtcNow -lt $deadline) {
+                    if (Test-Path -LiteralPath $exitFile) { break }
+                    Start-Sleep -Milliseconds 300
+                }
+            }
+
+            $exitCode = $null
+            if (Test-Path -LiteralPath $exitFile) {
+                $exitCode = [int](Get-Content -LiteralPath $exitFile -Raw).Trim()
+            }
+            elseif ($null -ne $proc) {
+                $exitCode = $proc.ExitCode
+            }
+            else {
+                $exitCode = 1
+                Write-Host "  ⚠️  Timed out or exit file missing: $exitFile" -ForegroundColor Yellow
+            }
+
+            if (Test-Path -LiteralPath $logFile) {
+                Write-Host "  --- winget output (standard-user) ---" -ForegroundColor DarkGray
+                Get-Content -LiteralPath $logFile -ErrorAction SilentlyContinue | ForEach-Object {
+                    Write-Host "  $_"
+                }
+                Write-Host "  --- end winget output ---" -ForegroundColor DarkGray
+                Write-Host "  Log file: $logFile" -ForegroundColor DarkGray
+            }
+
+            return $exitCode
+        }
+        finally {
+            if ($taskStarted) {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+            }
+            Remove-Item -LiteralPath $runnerPs1, $runnerSh -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    & winget @wingetArgs
+    return $LASTEXITCODE
+}
+
+function Test-CheckboxItemSelectable {
+    param(
+        $Item,
+        [bool]$AllowAllItemsSelection
+    )
+
+    $unselectable = ($Item -is [hashtable] -and $Item.ContainsKey('Unselectable') -and $Item.Unselectable)
+    if ($unselectable) {
+        return $false
+    }
+
+    $installed = ($Item -is [hashtable] -and $Item.ContainsKey('Installed') -and $Item.Installed)
+    if ($installed -and -not $AllowAllItemsSelection) {
+        return $false
+    }
+
+    return $true
+}
+
 function Invoke-PackageUninstall {
     <#
     .SYNOPSIS
@@ -613,7 +922,7 @@ function Get-InstalledPackages {
         if ($scoopPackages.Count -eq 0) {
             Write-Host "  No Scoop packages installed" -ForegroundColor Gray
         } else {
-            Write-Host "  Found $($scoopPackages.Count) package(s)" -ForegroundColor Cyan
+            Write-Host "  Found $($scoopPackages.Count) packages" -ForegroundColor Cyan
 
             # Use pagination for large lists
             $batchSize = 20
@@ -653,7 +962,7 @@ function Get-InstalledPackages {
 
             if ($allSelections.Count -gt 0) {
                 $allPackagesToUninstall += $allSelections
-                Write-Host "`n  ✅ Added $($allSelections.Count) Scoop package(s) to uninstall queue" -ForegroundColor Green
+                Write-Host "`n  ✅ Added $($allSelections.Count) Scoop packages to uninstall queue" -ForegroundColor Green
             }
         }
     } catch {
@@ -686,7 +995,7 @@ function Get-InstalledPackages {
         if ($npmPackages.Count -eq 0) {
             Write-Host "  No npm global packages installed" -ForegroundColor Gray
         } else {
-            Write-Host "  Found $($npmPackages.Count) package(s)" -ForegroundColor Cyan
+            Write-Host "  Found $($npmPackages.Count) packages" -ForegroundColor Cyan
 
             $batchSize = 20
             $allSelections = @()
@@ -725,7 +1034,7 @@ function Get-InstalledPackages {
 
             if ($allSelections.Count -gt 0) {
                 $allPackagesToUninstall += $allSelections
-                Write-Host "`n  ✅ Added $($allSelections.Count) npm package(s) to uninstall queue" -ForegroundColor Green
+                Write-Host "`n  ✅ Added $($allSelections.Count) npm packages to uninstall queue" -ForegroundColor Green
             }
         }
     } catch {
@@ -769,7 +1078,7 @@ function Get-InstalledPackages {
             if ($pipPackages.Count -eq 0) {
                 Write-Host "  No pip packages installed" -ForegroundColor Gray
             } else {
-                Write-Host "  Found $($pipPackages.Count) package(s)" -ForegroundColor Cyan
+                Write-Host "  Found $($pipPackages.Count) packages" -ForegroundColor Cyan
 
                 $batchSize = 20
                 $allSelections = @()
@@ -808,7 +1117,7 @@ function Get-InstalledPackages {
 
                 if ($allSelections.Count -gt 0) {
                     $allPackagesToUninstall += $allSelections
-                    Write-Host "`n  ✅ Added $($allSelections.Count) pip package(s) to uninstall queue" -ForegroundColor Green
+                    Write-Host "`n  ✅ Added $($allSelections.Count) pip packages to uninstall queue" -ForegroundColor Green
                 }
             }
         }
@@ -894,7 +1203,7 @@ function Get-InstalledPackages {
         if ($wingetPackages.Count -eq 0) {
             Write-Host "  No winget packages found" -ForegroundColor Gray
         } else {
-            Write-Host "  Found $($wingetPackages.Count) package(s)" -ForegroundColor Cyan
+            Write-Host "  Found $($wingetPackages.Count) packages" -ForegroundColor Cyan
 
             $batchSize = 20
             $allSelections = @()
@@ -933,7 +1242,7 @@ function Get-InstalledPackages {
 
             if ($allSelections.Count -gt 0) {
                 $allPackagesToUninstall += $allSelections
-                Write-Host "`n  ✅ Added $($allSelections.Count) winget package(s) to uninstall queue" -ForegroundColor Green
+                Write-Host "`n  ✅ Added $($allSelections.Count) winget packages to uninstall queue" -ForegroundColor Green
             }
         }
     } catch {
@@ -947,11 +1256,11 @@ function Get-InstalledPackages {
         Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Red
 
         $byManager = $allPackagesToUninstall | Group-Object Manager
-        Write-Host "Total: $($allPackagesToUninstall.Count) package(s) selected for removal`n" -ForegroundColor White
+        Write-Host "Total: $($allPackagesToUninstall.Count) packages selected for removal`n" -ForegroundColor White
 
         foreach ($group in $byManager) {
             $managerName = $group.Name.ToUpper()
-            Write-Host "  $managerName ($($group.Count) package(s)):" -ForegroundColor Yellow
+            Write-Host ('  {0} ({1} packages):' -f $managerName, $group.Count) -ForegroundColor Yellow
             foreach ($pkg in $group.Group) {
                 Write-Host "    • $($pkg.Name) ($($pkg.Version))" -ForegroundColor White
             }
@@ -1001,6 +1310,93 @@ function Get-InstalledPackages {
     }
 }
 
+function Test-PipVersionSatisfiesConstraint {
+    param([string]$Version, [string]$ConstraintExpr)
+
+    function Get-NormalizedVersion([string]$v) {
+        if ($v -match '^\s*(\d+(?:\.\d+)*)') {
+            $parts = @($Matches[1] -split '\.')
+            while ($parts.Count -lt 4) { $parts += '0' }
+            return [version]("{0}.{1}.{2}.{3}" -f $parts[0], $parts[1], $parts[2], $parts[3])
+        }
+        return $null
+    }
+
+    $targetVer = Get-NormalizedVersion $Version
+    if (-not $targetVer) { return $true }
+
+    foreach ($clause in ($ConstraintExpr -split ',')) {
+        $clause = $clause.Trim()
+        if ($clause -notmatch '^(==|!=|<=|>=|<|>|~=)\s*(.+)$') { continue }
+        $op = $Matches[1]
+        $clauseVer = Get-NormalizedVersion $Matches[2].Trim()
+        if (-not $clauseVer) { continue }
+
+        $satisfied = switch ($op) {
+            '==' { $targetVer -eq $clauseVer }
+            '!=' { $targetVer -ne $clauseVer }
+            '<=' { $targetVer -le $clauseVer }
+            '>=' { $targetVer -ge $clauseVer }
+            '<'  { $targetVer -lt $clauseVer }
+            '>'  { $targetVer -gt $clauseVer }
+            '~=' { $targetVer -ge $clauseVer }
+            default { $true }
+        }
+        if (-not $satisfied) { return $false }
+    }
+    return $true
+}
+
+function Get-PipUpgradeBlockReason {
+    param(
+        [string]$PackageName,
+        [hashtable]$ConstrainedPackages,
+        [string]$TargetVersion = $null
+    )
+
+    $pkgNameLower = $PackageName.ToLower()
+
+    if ($TargetVersion -and $ConstrainedPackages.ContainsKey($pkgNameLower)) {
+        foreach ($constraint in $ConstrainedPackages[$pkgNameLower]) {
+            if (-not (Test-PipVersionSatisfiesConstraint -Version $TargetVersion -ConstraintExpr $constraint.Constraint)) {
+                return "blocked: $($TargetVersion) violates $($constraint.Parent)'s constraint ($($constraint.Constraint))"
+            }
+        }
+    }
+
+    $dryRunOutput = pip install --upgrade --upgrade-strategy only-if-needed $PackageName --dry-run 2>&1 | Out-String
+    $wouldInstallLine = ($dryRunOutput -split "`r?`n") | Where-Object { $_ -match '^Would install ' } | Select-Object -First 1
+    if (-not $wouldInstallLine) {
+        return $null
+    }
+
+    $entries = ($wouldInstallLine -replace '^Would install ', '').Trim() -split '\s+'
+    $entryNamesInThisInstall = @{}
+    foreach ($entry in $entries) {
+        if ($entry -match '^(?<name>.+)-(?<version>\d.*)$') {
+            $entryNamesInThisInstall[$Matches['name'].ToLower()] = $true
+        }
+    }
+
+    foreach ($entry in $entries) {
+        if ($entry -notmatch '^(?<name>.+)-(?<version>\d.*)$') { continue }
+        $entryName = $Matches['name'].ToLower()
+        $entryVersion = $Matches['version']
+
+        if (-not $ConstrainedPackages.ContainsKey($entryName)) { continue }
+
+        foreach ($constraint in $ConstrainedPackages[$entryName]) {
+            if ($entryNamesInThisInstall.ContainsKey($constraint.Parent.ToLower())) { continue }
+
+            if (-not (Test-PipVersionSatisfiesConstraint -Version $entryVersion -ConstraintExpr $constraint.Constraint)) {
+                return "blocked: would install $entryName $entryVersion, but $($constraint.Parent) requires $($constraint.Constraint)"
+            }
+        }
+    }
+
+    return $null
+}
+
 function Select-PackagesToUpdate {
     [CmdletBinding()]
     param()
@@ -1018,47 +1414,6 @@ function Select-PackagesToUpdate {
     # pull in a constrained sub-dependency even when the selected package itself isn't
     # directly constrained (e.g. updating nab-project drags nab-index/nab-resolver along).
     $constrainedPackages = @{}
-
-    # Small PEP 440-ish comparer (numeric dotted segments only; pre/post/dev release
-    # qualifiers are ignored) used to check a candidate version against a pip constraint
-    # string like "<3", "==0.0.13", or ">=1.26,<3". Good enough to tell a real conflict
-    # apart from a constraint the candidate version already satisfies.
-    function Test-PipVersionSatisfiesConstraint {
-        param([string]$Version, [string]$ConstraintExpr)
-
-        function Get-NormalizedVersion([string]$v) {
-            if ($v -match '^\s*(\d+(?:\.\d+)*)') {
-                $parts = @($Matches[1] -split '\.')
-                while ($parts.Count -lt 4) { $parts += '0' }
-                return [version]("{0}.{1}.{2}.{3}" -f $parts[0], $parts[1], $parts[2], $parts[3])
-            }
-            return $null
-        }
-
-        $targetVer = Get-NormalizedVersion $Version
-        if (-not $targetVer) { return $true }
-
-        foreach ($clause in ($ConstraintExpr -split ',')) {
-            $clause = $clause.Trim()
-            if ($clause -notmatch '^(==|!=|<=|>=|<|>|~=)\s*(.+)$') { continue }
-            $op = $Matches[1]
-            $clauseVer = Get-NormalizedVersion $Matches[2].Trim()
-            if (-not $clauseVer) { continue }
-
-            $satisfied = switch ($op) {
-                '==' { $targetVer -eq $clauseVer }
-                '!=' { $targetVer -ne $clauseVer }
-                '<=' { $targetVer -le $clauseVer }
-                '>=' { $targetVer -ge $clauseVer }
-                '<'  { $targetVer -lt $clauseVer }
-                '>'  { $targetVer -gt $clauseVer }
-                '~=' { $targetVer -ge $clauseVer } # approximation: ~= also implies a same-prefix upper bound, not checked here
-                default { $true }
-            }
-            if (-not $satisfied) { return $false }
-        }
-        return $true
-    }
 
     # Check Scoop
     Write-Host "Checking Scoop for updates..." -ForegroundColor Gray
@@ -1242,6 +1597,30 @@ function Select-PackagesToUpdate {
                 }
             }
         }
+
+        # npm outdated uses the configured registry for "latest", but transitive deps may still
+        # be missing from corporate mirrors (e.g. yauzl@^3.4.0 not in JFrog while @vscode/vsce latest requires it).
+        if ($availableUpdates | Where-Object { $_.Manager -eq 'npm' }) {
+            Write-Host "  → Verifying npm updates against configured registry..." -ForegroundColor Gray
+            for ($npmIdx = 0; $npmIdx -lt $availableUpdates.Count; $npmIdx++) {
+                $npmUpdate = $availableUpdates[$npmIdx]
+                if ($npmUpdate.Manager -ne 'npm') { continue }
+
+                $resolveCheck = Test-NpmGlobalUpgradeResolvable -PackageName $npmUpdate.Name -NewVersion $npmUpdate.NewVersion
+                if (-not $resolveCheck.Ok) {
+                    Write-Host "    ⚠️  $($npmUpdate.Name): $($resolveCheck.Reason)" -ForegroundColor Yellow
+                    $availableUpdates[$npmIdx] = @{
+                        Manager = 'npm'
+                        Name = $npmUpdate.Name
+                        CurrentVersion = $npmUpdate.CurrentVersion
+                        NewVersion = $npmUpdate.NewVersion
+                        Unselectable = $true
+                        BlockReason = $resolveCheck.Reason
+                        DisplayText = "[$($npmUpdate.Name)] npm: $($npmUpdate.CurrentVersion) -> $($npmUpdate.NewVersion) - $($resolveCheck.Reason)"
+                    }
+                }
+            }
+        }
     } catch {
         Write-Host "  ⚠️  Error checking npm" -ForegroundColor Red
     }
@@ -1314,7 +1693,7 @@ function Select-PackagesToUpdate {
                                 $depName = $dep.package_name.ToLower()
                                 $reqVer = $dep.required_version
 
-                                # Check if there's an upper bound constraint (e.g., <79.0.0)
+                                # Check if there's an upper bound constraint (e.g. less than 79.0.0)
                                 if ($reqVer -match '<' -or $reqVer -match '==') {
                                     if (-not $constrainedPackages.ContainsKey($depName)) {
                                         $constrainedPackages[$depName] = @()
@@ -1327,37 +1706,29 @@ function Select-PackagesToUpdate {
                             }
                         }
 
-                        # Filter out constrained packages from available updates
-                        $filteredUpdates = @()
-                        foreach ($update in $availableUpdates) {
-                            if ($update.Manager -eq "pip") {
-                                $pkgNameLower = $update.Name.ToLower()
-                                if ($constrainedPackages.ContainsKey($pkgNameLower)) {
-                                    # Check if the new version would violate constraints
-                                    $constraints = $constrainedPackages[$pkgNameLower]
-                                    $wouldBreak = $false
+                        # Mark pip updates that would fail (direct pin or dry-run cascade) as unselectable
+                        Write-Host "  → Dry-run pip updates for dependency conflicts..." -ForegroundColor Gray
+                        for ($pipIdx = 0; $pipIdx -lt $availableUpdates.Count; $pipIdx++) {
+                            $pipUpdate = $availableUpdates[$pipIdx]
+                            if ($pipUpdate.Manager -ne 'pip') { continue }
 
-                                    foreach ($constraint in $constraints) {
-                                        if (-not (Test-PipVersionSatisfiesConstraint -Version $update.NewVersion -ConstraintExpr $constraint.Constraint)) {
-                                            Write-Host "    ⚠️  Skipping $($update.Name): $($update.NewVersion) would violate $($constraint.Parent)'s constraint ($($constraint.Constraint))" -ForegroundColor Yellow
-                                            $wouldBreak = $true
-                                            break
-                                        }
-                                    }
+                            $blockReason = Get-PipUpgradeBlockReason -PackageName $pipUpdate.Name `
+                                -ConstrainedPackages $constrainedPackages `
+                                -TargetVersion $pipUpdate.NewVersion
 
-                                    if (-not $wouldBreak) {
-                                        $filteredUpdates += $update
-                                    }
-                                } else {
-                                    $filteredUpdates += $update
+                            if ($blockReason) {
+                                Write-Host "    ⚠️  $($pipUpdate.Name): $blockReason" -ForegroundColor Yellow
+                                $availableUpdates[$pipIdx] = @{
+                                    Manager = 'pip'
+                                    Name = $pipUpdate.Name
+                                    CurrentVersion = $pipUpdate.CurrentVersion
+                                    NewVersion = $pipUpdate.NewVersion
+                                    Unselectable = $true
+                                    BlockReason = $blockReason
+                                    DisplayText = "[$($pipUpdate.Name)] pip: $($pipUpdate.CurrentVersion) -> $($pipUpdate.NewVersion) - $blockReason"
                                 }
-                            } else {
-                                $filteredUpdates += $update
                             }
                         }
-
-                        # Replace available updates with filtered list
-                        $availableUpdates = $filteredUpdates
                     } else {
                         Write-Host "    ℹ️  pipdeptree not found - install with 'pip install pipdeptree' for dependency checking" -ForegroundColor Gray
                     }
@@ -1466,7 +1837,7 @@ function Select-PackagesToUpdate {
     $selectedPackages = Show-CheckboxSelection `
         -Items $availableUpdates `
         -Title "MANAGE PACKAGE UPDATES" `
-        -Instructions "Use Up/Down arrows to navigate, Space to select/deselect, Enter to install" `
+        -Instructions "Use Up/Down arrows to navigate, Space to select/deselect, Enter to install (gray = not selectable)" `
         -UseClearHost `
         -AllowAllItemsSelection
 
@@ -1484,7 +1855,7 @@ function Select-PackagesToUpdate {
     Write-Host "║  INSTALLING SELECTED UPDATES               ║" -ForegroundColor Magenta
     Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Magenta
 
-    Write-Host "Installing $($selectedPackages.Count) package(s)...`n" -ForegroundColor Cyan
+    Write-Host "Installing $($selectedPackages.Count) packages...`n" -ForegroundColor Cyan
 
     foreach ($pkg in $selectedPackages) {
         Write-Host "→ Updating $($pkg.Name) ($($pkg.Manager))..." -ForegroundColor Yellow
@@ -1494,64 +1865,45 @@ function Select-PackagesToUpdate {
                 scoop update $pkg.Name
                 Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
             } elseif ($pkg.Manager -eq "npm") {
-                npm install -g "$($pkg.Name)@$($pkg.NewVersion)"
-                Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
+                if ($pkg.Unselectable) {
+                    Write-Host "  ⚠️  Skipped $($pkg.Name): $($pkg.BlockReason)" -ForegroundColor Yellow
+                } else {
+                    npm install -g "$($pkg.Name)@$($pkg.NewVersion)"
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
+                    } else {
+                        Write-Host "  ❌ $($pkg.Name) update failed (exit $LASTEXITCODE)" -ForegroundColor Red
+                    }
+                }
             } elseif ($pkg.Manager -eq "winget") {
-                winget upgrade --id $pkg.Name --accept-package-agreements --accept-source-agreements
-                Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
+                $wingetExit = Invoke-WingetPackageUpgrade -PackageId $pkg.Name
+                if ($wingetExit -eq 0) {
+                    Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
+                } else {
+                    Write-Host "  ❌ $($pkg.Name) update failed (exit $wingetExit)" -ForegroundColor Red
+                }
             } elseif ($pkg.Manager -eq "pip") {
                 # pip itself requires special update command
                 if ($pkg.Name -eq "pip") {
                     python.exe -m pip install --upgrade pip
-                    Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
-                } else {
-                    # Dry-run first: updating $pkg.Name can drag its own sub-dependencies to
-                    # versions that violate a DIFFERENT installed package's < or == constraint,
-                    # even when $pkg.Name itself isn't directly constrained (e.g. updating
-                    # nab-project pulls nab-index/nab-resolver past nab-python's ==0.0.13 pin).
-                    $dryRunOutput = pip install --upgrade --upgrade-strategy only-if-needed $pkg.Name --dry-run 2>&1 | Out-String
-                    $wouldInstallLine = ($dryRunOutput -split "`r?`n") | Where-Object { $_ -match '^Would install ' } | Select-Object -First 1
-
-                    $blockReason = $null
-                    if ($wouldInstallLine) {
-                        $entries = ($wouldInstallLine -replace '^Would install ', '').Trim() -split '\s+'
-
-                        # Names of every package this single install would touch. A constraint
-                        # whose Parent is in this set is stale — that parent is being upgraded
-                        # in the same transaction, so its old requirement no longer applies
-                        # (e.g. nab-project's own ==0.0.15 pin on nab-index doesn't block a
-                        # cascade update that upgrades nab-project and nab-index together).
-                        $entryNamesInThisInstall = @{}
-                        foreach ($entry in $entries) {
-                            if ($entry -match '^(?<name>.+)-(?<version>\d.*)$') {
-                                $entryNamesInThisInstall[$Matches['name'].ToLower()] = $true
-                            }
-                        }
-
-                        foreach ($entry in $entries) {
-                            if ($entry -notmatch '^(?<name>.+)-(?<version>\d.*)$') { continue }
-                            $entryName = $Matches['name'].ToLower()
-                            $entryVersion = $Matches['version']
-
-                            if (-not $constrainedPackages.ContainsKey($entryName)) { continue }
-
-                            foreach ($constraint in $constrainedPackages[$entryName]) {
-                                if ($entryNamesInThisInstall.ContainsKey($constraint.Parent.ToLower())) { continue }
-
-                                if (-not (Test-PipVersionSatisfiesConstraint -Version $entryVersion -ConstraintExpr $constraint.Constraint)) {
-                                    $blockReason = "would install $entryName $entryVersion, but $($constraint.Parent) requires $($constraint.Constraint)"
-                                    break
-                                }
-                            }
-                            if ($blockReason) { break }
-                        }
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
+                    } else {
+                        Write-Host "  ❌ $($pkg.Name) update failed (exit $LASTEXITCODE)" -ForegroundColor Red
                     }
-
+                } elseif ($pkg.Unselectable) {
+                    Write-Host "  ⚠️  Skipped $($pkg.Name): $($pkg.BlockReason)" -ForegroundColor Yellow
+                } else {
+                    $blockReason = Get-PipUpgradeBlockReason -PackageName $pkg.Name -ConstrainedPackages $constrainedPackages -TargetVersion $pkg.NewVersion
                     if ($blockReason) {
                         Write-Host "  ⚠️  Skipped $($pkg.Name): $blockReason" -ForegroundColor Yellow
                     } else {
                         pip install --upgrade --upgrade-strategy only-if-needed $pkg.Name
-                        Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
+                        } else {
+                            Write-Host "  ❌ $($pkg.Name) update failed (exit $LASTEXITCODE)" -ForegroundColor Red
+                        }
                     }
                 }
             }
@@ -1628,6 +1980,7 @@ function Show-CheckboxSelection {
         for ($i = 0; $i -lt $Items.Count; $i++) {
             $item = $Items[$i]
             $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
+            $isUnselectable = if ($item -is [hashtable] -and $item.ContainsKey('Unselectable')) { $item.Unselectable } else { $false }
             $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
 
             # Truncate to console width
@@ -1642,7 +1995,7 @@ function Show-CheckboxSelection {
 
             # Simple color output for Clear-Host mode
             $color = if ($i -eq $currentIndex) { "Green" } else { "White" }
-            if ($isInstalled) { $color = "DarkGray" }
+            if ($isInstalled -or $isUnselectable) { $color = "DarkGray" }
             Write-Host $line -ForegroundColor $color
         }
     }
@@ -1675,6 +2028,7 @@ function Show-CheckboxSelection {
         for ($i = 0; $i -lt $Items.Count; $i++) {
             $item = $Items[$i]
             $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
+            $isUnselectable = if ($item -is [hashtable] -and $item.ContainsKey('Unselectable')) { $item.Unselectable } else { $false }
             $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
 
             # Truncate to console width
@@ -1685,7 +2039,7 @@ function Show-CheckboxSelection {
 
             # Use same format as redraw: arrow space checkbox space text
             $line = "  [ ] $displayText"
-            if ($isInstalled) {
+            if ($isInstalled -or $isUnselectable) {
                 Write-Host $line -ForegroundColor DarkGray
             } else {
                 Write-Host $line
@@ -1713,6 +2067,7 @@ function Show-CheckboxSelection {
 
                 $item = $Items[$i]
                 $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
+                $isUnselectable = if ($item -is [hashtable] -and $item.ContainsKey('Unselectable')) { $item.Unselectable } else { $false }
                 $checkbox = if ($selectedIndexes[$i]) { "[x]" } else { "[ ]" }
                 $arrow = if ($i -eq $currentIndex) { ">" } else { " " }
 
@@ -1730,7 +2085,7 @@ function Show-CheckboxSelection {
                 $line = $line.PadRight([Console]::WindowWidth - 1)
 
                 # Write with color based on current selection and installed status
-                if ($isInstalled) {
+                if ($isInstalled -or $isUnselectable) {
                     [Console]::ForegroundColor = [ConsoleColor]::DarkGray
                 } elseif ($i -eq $currentIndex) {
                     [Console]::ForegroundColor = [ConsoleColor]::Green
@@ -1763,19 +2118,15 @@ function Show-CheckboxSelection {
                     $currentIndex = ($currentIndex + 1) % $Items.Count
                 }
                 'Spacebar' {
-                    # Allow selection based on installed status
                     $item = $Items[$currentIndex]
-                    $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
-                    if ($AllowAllItemsSelection -or -not $isInstalled) {
+                    if (Test-CheckboxItemSelectable -Item $item -AllowAllItemsSelection:$AllowAllItemsSelection) {
                         $selectedIndexes[$currentIndex] = -not $selectedIndexes[$currentIndex]
                     }
                 }
                 'A' {
-                    # Select all items based on AllowAllItemsSelection parameter
                     for ($i = 0; $i -lt $selectedIndexes.Count; $i++) {
                         $item = $Items[$i]
-                        $isInstalled = if ($item -is [hashtable] -and $item.ContainsKey('Installed')) { $item.Installed } else { $false }
-                        if ($AllowAllItemsSelection -or -not $isInstalled) {
+                        if (Test-CheckboxItemSelectable -Item $item -AllowAllItemsSelection:$AllowAllItemsSelection) {
                             $selectedIndexes[$i] = $true
                         }
                     }
@@ -2055,12 +2406,12 @@ function Search-Packages {
         param([int]$idx)
         Write-Host "  Search scope: " -NoNewline
         if ($idx -eq 0) {
-            Write-Host "[ (I)nstalled ] " -ForegroundColor Cyan -NoNewline
+            Write-Host '[ (I)nstalled ] ' -ForegroundColor Cyan -NoNewline
             Write-Host "  (G)lobally available  " -ForegroundColor DarkGray
         }
         else {
             Write-Host "  (I)nstalled   " -ForegroundColor DarkGray -NoNewline
-            Write-Host "[ (G)lobally available ]" -ForegroundColor Cyan
+            Write-Host '[ (G)lobally available ]' -ForegroundColor Cyan
         }
     }
 
@@ -2228,7 +2579,7 @@ function Search-Packages {
             if ($scoopInstalledResults.Count -eq 0) {
                 Write-Host "  No matches found" -ForegroundColor Gray
             } else {
-                Write-Host "  Found $($scoopInstalledResults.Count) installed package(s) matching '$searchTerm'" -ForegroundColor Cyan
+                Write-Host "  Found $($scoopInstalledResults.Count) installed packages matching '$searchTerm'" -ForegroundColor Cyan
                 Write-Host "  Select packages to uninstall..." -ForegroundColor Gray
                 Write-Host ""
 
@@ -2274,7 +2625,7 @@ function Search-Packages {
                         $pkg.Action = "uninstall"
                     }
                     $script:AllPackageSelections += $allSelections
-                    Write-Host "`n✅ Added $($allSelections.Count) Scoop package(s) to uninstall queue" -ForegroundColor Green
+                    Write-Host "`n✅ Added $($allSelections.Count) Scoop packages to uninstall queue" -ForegroundColor Green
                 } else {
                     Write-Host "`nNo Scoop packages selected." -ForegroundColor Yellow
                 }
@@ -2343,7 +2694,7 @@ function Search-Packages {
                     }
                 }
 
-                Write-Host "  Found $($scoopSearchResults.Count) package(s)" -ForegroundColor Cyan
+                Write-Host "  Found $($scoopSearchResults.Count) packages" -ForegroundColor Cyan
                 Write-Host ""
 
                 # Always show results, even if all are installed
@@ -2355,14 +2706,14 @@ function Search-Packages {
                     $installedCount = ($scoopSearchResults | Where-Object { $_.Installed }).Count
 
                     if ($installedCount -gt 0) {
-                        Write-Host "  $installedCount package(s) already installed (shown in gray in selection menu)" -ForegroundColor Gray
+                        Write-Host "  $installedCount packages already installed (shown in gray in selection menu)" -ForegroundColor Gray
                     }
                     if ($availableCount -eq 0 -and $installedCount -gt 0) {
                         Write-Host "  All matching packages are already installed!" -ForegroundColor Green
                         Write-Host "  Showing anyway for reference..." -ForegroundColor Gray
                         Write-Host ""
                     } elseif ($availableCount -gt 0) {
-                        Write-Host "  $availableCount package(s) available to install" -ForegroundColor Cyan
+                        Write-Host "  $availableCount packages available to install" -ForegroundColor Cyan
                         Write-Host "  Select packages to install using the interactive menu..." -ForegroundColor Gray
                         Write-Host ""
                     }
@@ -2378,7 +2729,7 @@ function Search-Packages {
                             }
                         }
                         $script:AllPackageSelections += $selectedPackages
-                        Write-Host "`n✅ Added $($selectedPackages.Count) Scoop package(s) to installation queue" -ForegroundColor Green
+                        Write-Host "`n✅ Added $($selectedPackages.Count) Scoop packages to installation queue" -ForegroundColor Green
                     } elseif ($null -eq $selectedPackages) {
                         Write-Host "`nScoop selection cancelled." -ForegroundColor Yellow
                     } else {
@@ -2432,7 +2783,7 @@ function Search-Packages {
             if ($npmInstalledResults.Count -eq 0) {
                 Write-Host "  No matches found" -ForegroundColor Gray
             } else {
-                Write-Host "  Found $($npmInstalledResults.Count) installed package(s) matching '$searchTerm'" -ForegroundColor Cyan
+                Write-Host "  Found $($npmInstalledResults.Count) installed packages matching '$searchTerm'" -ForegroundColor Cyan
                 Write-Host "  Select packages to uninstall..." -ForegroundColor Gray
                 Write-Host ""
 
@@ -2478,7 +2829,7 @@ function Search-Packages {
                         $pkg.Action = "uninstall"
                     }
                     $script:AllPackageSelections += $allSelections
-                    Write-Host "`n✅ Added $($allSelections.Count) npm package(s) to uninstall queue" -ForegroundColor Green
+                    Write-Host "`n✅ Added $($allSelections.Count) npm packages to uninstall queue" -ForegroundColor Green
                 } else {
                     Write-Host "`nNo npm packages selected." -ForegroundColor Yellow
                 }
@@ -2603,12 +2954,16 @@ function Search-Packages {
                             $powershell.RunspacePool = $runspacePool
 
                             [void]$powershell.AddScript({
-                                param($name, $url)
+                                param($name)
                                 try {
-                                    $data = Invoke-RestMethod -Uri $url -Method Get -ErrorAction Stop -TimeoutSec 3
+                                    $jsonText = & npm view $name version description --json 2>$null | Out-String
+                                    if (-not $jsonText.Trim()) {
+                                        return @{ name = $name; success = $false }
+                                    }
+                                    $data = $jsonText | ConvertFrom-Json
                                     return @{
                                         name = $name
-                                        version = $data.'dist-tags'.latest
+                                        version = $data.version
                                         description = $data.description
                                         success = $true
                                     }
@@ -2620,7 +2975,6 @@ function Search-Packages {
                                 }
                             })
                             [void]$powershell.AddArgument($pkgName)
-                            [void]$powershell.AddArgument("https://registry.npmjs.org/$pkgName")
 
                             $runspaces += @{
                                 Pipe = $powershell
@@ -2701,7 +3055,7 @@ function Search-Packages {
                             }
                         }
                         $script:AllPackageSelections += $allSelections
-                        Write-Host "`n✅ Added $($allSelections.Count) npm package(s) to installation queue" -ForegroundColor Green
+                        Write-Host "`n✅ Added $($allSelections.Count) npm packages to installation queue" -ForegroundColor Green
                     } elseif (-not $result.Cancelled) {
                         Write-Host "`nNo npm packages selected." -ForegroundColor Yellow
                     }
@@ -2794,7 +3148,7 @@ function Search-Packages {
                 if ($pipInstalledResults.Count -eq 0) {
                     Write-Host "  No matches found" -ForegroundColor Gray
                 } else {
-                    Write-Host "  Found $($pipInstalledResults.Count) installed package(s) matching '$searchTerm'" -ForegroundColor Cyan
+                    Write-Host "  Found $($pipInstalledResults.Count) installed packages matching '$searchTerm'" -ForegroundColor Cyan
                     Write-Host "  Select packages to uninstall..." -ForegroundColor Gray
                     Write-Host ""
 
@@ -2840,7 +3194,7 @@ function Search-Packages {
                             $pkg.Action = "uninstall"
                         }
                         $script:AllPackageSelections += $allSelections
-                        Write-Host "`n✅ Added $($allSelections.Count) pip package(s) to uninstall queue" -ForegroundColor Green
+                        Write-Host "`n✅ Added $($allSelections.Count) pip packages to uninstall queue" -ForegroundColor Green
                     } else {
                         Write-Host "`nNo pip packages selected." -ForegroundColor Yellow
                     }
@@ -3005,13 +3359,13 @@ function Search-Packages {
                         $installedCount = ($pipSearchResults | Where-Object { $_.Installed }).Count
 
                         if ($installedCount -gt 0) {
-                            Write-Host "  $installedCount package(s) already installed (shown in gray in selection menu)" -ForegroundColor Gray
+                            Write-Host "  $installedCount packages already installed (shown in gray in selection menu)" -ForegroundColor Gray
                         }
                         if ($availableCount -eq 0) {
                             Write-Host "  All matching packages are already installed!" -ForegroundColor Green
                         } else {
                             Write-Host ""
-                            Write-Host "  $availableCount package(s) available to install" -ForegroundColor Cyan
+                            Write-Host "  $availableCount packages available to install" -ForegroundColor Cyan
                             Write-Host "  Select packages to install using the interactive menu..." -ForegroundColor Gray
                             Write-Host ""
 
@@ -3026,7 +3380,7 @@ function Search-Packages {
                                     }
                                 }
                                 $script:AllPackageSelections += $selectedPackages
-                                Write-Host "`n✅ Added $($selectedPackages.Count) pip package(s) to installation queue" -ForegroundColor Green
+                                Write-Host "`n✅ Added $($selectedPackages.Count) pip packages to installation queue" -ForegroundColor Green
                             } elseif ($null -eq $selectedPackages) {
                                 Write-Host "`nPip selection cancelled." -ForegroundColor Yellow
                             } else {
@@ -3167,7 +3521,7 @@ function Search-Packages {
                 if ($wingetSearchResults.Count -eq 0) {
                     Write-Host "  No matches found" -ForegroundColor Gray
                 } else {
-                    Write-Host "  Found $($wingetSearchResults.Count) installed package(s) matching '$searchTerm'" -ForegroundColor Cyan
+                    Write-Host "  Found $($wingetSearchResults.Count) installed packages matching '$searchTerm'" -ForegroundColor Cyan
                     Write-Host "  Select packages to uninstall..." -ForegroundColor Gray
                     Write-Host ""
 
@@ -3218,14 +3572,14 @@ function Search-Packages {
                             $pkg.Action = "uninstall"
                         }
                         $script:AllPackageSelections += $allSelections
-                        Write-Host "`n✅ Added $($allSelections.Count) winget package(s) to uninstall queue" -ForegroundColor Green
+                        Write-Host "`n✅ Added $($allSelections.Count) winget packages to uninstall queue" -ForegroundColor Green
                     } elseif ($null -eq $allSelections -or $allSelections.Count -eq 0) {
                         Write-Host "`nNo winget packages selected." -ForegroundColor Yellow
                     }
                 }
             } else {
                 # Display with highlighting, then offer selection with pagination
-                Write-Host "  Found $($wingetSearchResults.Count) package(s)" -ForegroundColor Cyan
+                Write-Host "  Found $($wingetSearchResults.Count) packages" -ForegroundColor Cyan
                 Write-Host ""
 
                 # Offer to install packages from search results with pagination
@@ -3237,12 +3591,12 @@ function Search-Packages {
                     $installedCount = ($wingetSearchResults | Where-Object { $_.Installed }).Count
 
                     if ($installedCount -gt 0) {
-                        Write-Host "  $installedCount package(s) already installed (shown in gray in selection menu)" -ForegroundColor Gray
+                        Write-Host "  $installedCount packages already installed (shown in gray in selection menu)" -ForegroundColor Gray
                     }
                     if ($availableCount -eq 0) {
                         Write-Host "  All matching packages are already installed!" -ForegroundColor Green
                     } else {
-                        Write-Host "  $availableCount package(s) available to install" -ForegroundColor Cyan
+                        Write-Host "  $availableCount packages available to install" -ForegroundColor Cyan
                         Write-Host "  Displaying results in batches for easier browsing..." -ForegroundColor Gray
                         Write-Host ""
 
@@ -3288,7 +3642,7 @@ function Search-Packages {
                                 }
                             }
                             $script:AllPackageSelections += $allSelections
-                            Write-Host "`n✅ Added $($allSelections.Count) winget package(s) to installation queue" -ForegroundColor Green
+                            Write-Host "`n✅ Added $($allSelections.Count) winget packages to installation queue" -ForegroundColor Green
                         } elseif (-not $result.Cancelled) {
                             Write-Host "`nNo winget packages selected." -ForegroundColor Yellow
                         }
@@ -3323,11 +3677,11 @@ function Search-Packages {
         Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
 
         $byManager = $packagesToInstall | Group-Object Manager
-        Write-Host "Total: $($packagesToInstall.Count) package(s) to install`n" -ForegroundColor White
+        Write-Host "Total: $($packagesToInstall.Count) packages to install`n" -ForegroundColor White
 
         foreach ($group in $byManager) {
             $managerName = $group.Name.ToUpper()
-            Write-Host "  $managerName ($($group.Count) package(s)):" -ForegroundColor Yellow
+            Write-Host ('  {0} ({1} packages):' -f $managerName, $group.Count) -ForegroundColor Yellow
             foreach ($pkg in $group.Group) {
                 if ($pkg.Version) {
                     Write-Host "    • $($pkg.Name) ($($pkg.Version))" -ForegroundColor White
@@ -3345,11 +3699,11 @@ function Search-Packages {
         Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Red
 
         $byManager = $packagesToUninstall | Group-Object Manager
-        Write-Host "Total: $($packagesToUninstall.Count) package(s) to uninstall`n" -ForegroundColor White
+        Write-Host "Total: $($packagesToUninstall.Count) packages to uninstall`n" -ForegroundColor White
 
         foreach ($group in $byManager) {
             $managerName = $group.Name.ToUpper()
-            Write-Host "  $managerName ($($group.Count) package(s)):" -ForegroundColor Yellow
+            Write-Host ('  {0} ({1} packages):' -f $managerName, $group.Count) -ForegroundColor Yellow
             foreach ($pkg in $group.Group) {
                 if ($pkg.Version) {
                     Write-Host "    • $($pkg.Name) ($($pkg.Version))" -ForegroundColor White
@@ -3366,7 +3720,7 @@ function Search-Packages {
         # Warning banner for uninstalls
         Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Red
         Write-Host "║                        ⚠️  WARNING ⚠️                          ║" -ForegroundColor Red
-        $uninstallMsg = "  You are about to UNINSTALL $($packagesToUninstall.Count) package(s)."
+        $uninstallMsg = "  You are about to UNINSTALL $($packagesToUninstall.Count) packages."
         Write-Host "║$($uninstallMsg.PadRight(64))║" -ForegroundColor Red
         Write-Host "║  This action CANNOT be undone!                                 ║" -ForegroundColor Red
         Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Red
@@ -3374,9 +3728,9 @@ function Search-Packages {
 
         # First confirmation
         if ($packagesToInstall.Count -gt 0) {
-            Write-Host "Are you sure you want to install $($packagesToInstall.Count) AND uninstall $($packagesToUninstall.Count) package(s)? (y/N): " -ForegroundColor Yellow -NoNewline
+            Write-Host "Are you sure you want to install $($packagesToInstall.Count) AND uninstall $($packagesToUninstall.Count) packages? (y/N): " -ForegroundColor Yellow -NoNewline
         } else {
-            Write-Host "Are you sure you want to uninstall $($packagesToUninstall.Count) package(s)? (y/N): " -ForegroundColor Yellow -NoNewline
+            Write-Host "Are you sure you want to uninstall $($packagesToUninstall.Count) packages? (y/N): " -ForegroundColor Yellow -NoNewline
         }
         $confirm1 = Read-Host
         if ($confirm1.ToLower() -ne "y") {
@@ -3693,7 +4047,7 @@ function Invoke-PackageManagerCleanup {
                 }
             )
             if ($appsNeedingCleanup.Count -gt 0) {
-                Write-Host "  Cleaning up old versions ($($appsNeedingCleanup.Count) app(s))..." -ForegroundColor Cyan
+                Write-Host ('  Cleaning up old versions ({0} apps)...' -f $appsNeedingCleanup.Count) -ForegroundColor Cyan
                 Invoke-ScoopProcess -Command "cleanup * -k"
                 Write-Host "  ✅ Old versions cleaned" -ForegroundColor Green
             } else {
@@ -3707,7 +4061,7 @@ function Invoke-PackageManagerCleanup {
                 $cacheSizeMB = [math]::Round(
                     ($cacheFiles | Measure-Object -Property Length -Sum).Sum / 1MB, 1
                 )
-                Write-Host "  Clear cache ($($cacheFiles.Count) file(s), $cacheSizeMB MB)? (y/N): " -ForegroundColor Yellow -NoNewline
+                Write-Host ('  Clear cache ({0} files, {1} MB)? (y/N): ' -f $cacheFiles.Count, $cacheSizeMB) -ForegroundColor Yellow -NoNewline
                 $wipeCacheResponse = Read-Host
                 if ($wipeCacheResponse -match '^[Yy]') {
                     Write-Host "  Removing all cached installers..." -ForegroundColor Cyan
@@ -3828,7 +4182,7 @@ function Invoke-PackageManagerCleanup {
                 $pipCachePackages = [int]$matches[1]
             }
             if ($pipCachePackages -gt 0) {
-                Write-Host "  Purging pip cache ($pipCachePackages package(s))..." -ForegroundColor Cyan
+                Write-Host ('  Purging pip cache ({0} packages)...' -f $pipCachePackages) -ForegroundColor Cyan
                 pip cache purge
                 Write-Host "  ✅ pip cache purged" -ForegroundColor Green
             } else {
@@ -3866,7 +4220,7 @@ function Invoke-PackageManagerCleanup {
                     $wingetSizeMB = [math]::Round(
                         ($wingetCacheItems | Measure-Object -Property Length -Sum).Sum / 1MB, 1
                     )
-                    Write-Host "  Clear winget cache ($($wingetCacheItems.Count) file(s), $wingetSizeMB MB)? (y/N): " -ForegroundColor Yellow -NoNewline
+                    Write-Host ('  Clear winget cache ({0} files, {1} MB)? (y/N): ' -f $wingetCacheItems.Count, $wingetSizeMB) -ForegroundColor Yellow -NoNewline
                     $clearWingetCacheResponse = Read-Host
                     if ($clearWingetCacheResponse -match '^[Yy]') {
                         Write-Host "  Clearing winget cache..." -ForegroundColor Cyan
