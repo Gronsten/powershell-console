@@ -41,6 +41,15 @@ A comprehensive, interactive PowerShell management console (6,200+ lines) for:
 5. **Modular Features** - Optional modules in modules/ directory
 6. **Backward Compatibility** - Graceful fallback for old config schemas
 
+### Key design decisions
+
+**KDD-001: PowerShell 7+ only (no Windows PowerShell 5.1)**
+
+The console targets **PowerShell 7+ (`pwsh`)** only. We do not test or maintain
+compatibility with Windows PowerShell 5.1. Syntax and APIs may assume PS 7 behavior
+(for example `#` comments, null-coalescing patterns, and string parsing). Launch with
+`pwsh` (see [SETUP.md](SETUP.md)); do not rely on `powershell.exe` for daily use.
+
 ---
 
 ## Project Structure
@@ -949,7 +958,7 @@ Show-ArrowMenu starts at position 5
 
 | Dependency | Purpose | Installation | Verification |
 |------------|---------|-------------|--------------|
-| **PowerShell 5.1+** or **PowerShell 7+** | Runtime environment | Built-in (Windows) or [Download](https://github.com/PowerShell/PowerShell) | `$PSVersionTable.PSVersion` |
+| **PowerShell 7+ (`pwsh`)** | Runtime environment (KDD-001: not PS 5.1) | [Download](https://github.com/PowerShell/PowerShell/releases) or `scoop install pwsh` | `pwsh -NoProfile -Command '$PSVersionTable.PSVersion'` |
 | **AWS CLI v2** | AWS API interactions | [Download](https://aws.amazon.com/cli/) | `aws --version` |
 | **okta-aws-cli** | Okta SSO authentication | `scoop install okta-aws-cli` or [GitHub](https://github.com/okta/okta-aws-cli) | `okta-aws-cli --version` |
 | **Session Manager Plugin** | AWS SSM connections | [Download](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) | `session-manager-plugin --version` |

@@ -8,6 +8,10 @@ This directory contains data files used by the PowerShell AWS Console.
 
 **Source:** https://raw.githubusercontent.com/nice-registry/all-the-package-names/master/names.json
 
+**Metadata lookup:** Global npm search uses this file for name matching only. Version and
+description come from `npm view` against your configured registry (`npm config get registry`,
+e.g. corporate JFrog), not from `registry.npmjs.org`.
+
 **Size:** ~90MB (3.6M+ package names)
 
 **Update Frequency:** Automatically checked every 24 hours during npm package searches with optional user-prompted update
