@@ -20,6 +20,22 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.4 (2026-10-01)
+
+**Changed:**
+- **Manage Updates: blocked updates section** — Updates that cannot install (npm registry
+  gaps, pip dependency blocks) are sorted to the bottom by manager then name (Scoop, npm,
+  pip, winget). They appear in a **collapsible footer** (collapsed by default). Toggle
+  with **E** or **Enter** on the section header. Last expanded/collapsed state persists in
+  `config.json` as `packageManager.blockedUpdatesSectionExpanded`.
+
+**Config Changes:**
+- Added `packageManager.blockedUpdatesSectionExpanded` (boolean) — default `false`
+
+**Files Changed:**
+- `console.ps1` — `Show-ManageUpdatesSelection`, sort/partition helpers
+- `config.example.json` — new field, `config.17`
+
 ### v1.22.3 (2026-09-23)
 
 **Bug Fixes:**
