@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.22.4"
+$script:ConsoleVersion = "1.22.5"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -840,6 +840,10 @@ function Get-PackageUpdateManagerRank {
 function Sort-PackageUpdateItems {
     param([array]$Items)
 
+    if ($null -eq $Items -or $Items.Count -eq 0) {
+        return @()
+    }
+
     return @($Items | Sort-Object `
             @{ Expression = { Get-PackageUpdateManagerRank -Manager $_.Manager } }, `
             @{ Expression = {
@@ -885,15 +889,15 @@ function Show-ManageUpdatesSelection {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
-        [array]$SelectableUpdates,
+        [Parameter(Mandatory = $false)]
+        [array]$SelectableUpdates = @(),
 
-        [Parameter(Mandatory = $true)]
-        [array]$BlockedUpdates
+        [Parameter(Mandatory = $false)]
+        [array]$BlockedUpdates = @()
     )
 
-    $selectable = @($SelectableUpdates)
-    $blocked = @($BlockedUpdates)
+    $selectable = @($SelectableUpdates | Where-Object { $null -ne $_ })
+    $blocked = @($BlockedUpdates | Where-Object { $null -ne $_ })
     $blockedExpanded = Get-PackageManagerBlockedUpdatesExpanded
 
     $selected = @(foreach ($null in $selectable) { $false })
@@ -2069,8 +2073,8 @@ function Select-PackagesToUpdate {
         return
     }
 
-    $selectableUpdates = Sort-PackageUpdateItems -Items @($availableUpdates | Where-Object { -not $_.Unselectable })
-    $blockedUpdates = Sort-PackageUpdateItems -Items @($availableUpdates | Where-Object { $_.Unselectable })
+    $selectableUpdates = @(Sort-PackageUpdateItems -Items @($availableUpdates | Where-Object { -not $_.Unselectable }))
+    $blockedUpdates = @(Sort-PackageUpdateItems -Items @($availableUpdates | Where-Object { $_.Unselectable }))
 
     if ($selectableUpdates.Count -eq 0 -and $blockedUpdates.Count -gt 0) {
         Write-Host "`nNo installable updates (all candidates blocked by registry or dependencies)." -ForegroundColor Yellow

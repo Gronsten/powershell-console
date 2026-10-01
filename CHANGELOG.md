@@ -20,6 +20,17 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.5 (2026-10-01)
+
+**Bug Fixes:**
+- **Manage Updates: crash when every update is blocked** — If all candidates were blocked
+  (registry or pip constraints) and none were installable, `Sort-PackageUpdateItems` could
+  return `$null`, which broke `Show-ManageUpdatesSelection`. Empty selectable lists now
+  coerce to `@()` so the blocked-only footer UI still opens.
+
+**Files Changed:**
+- `console.ps1` — null-safe sort and selection parameters
+
 ### v1.22.4 (2026-10-01)
 
 **Changed:**
