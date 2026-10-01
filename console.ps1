@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.22.3"
+$script:ConsoleVersion = "1.22.4"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -823,6 +823,244 @@ function Test-CheckboxItemSelectable {
     }
 
     return $true
+}
+
+function Get-PackageUpdateManagerRank {
+    param([string]$Manager)
+
+    switch ($Manager) {
+        'Scoop' { return 0 }
+        'npm' { return 1 }
+        'pip' { return 2 }
+        'winget' { return 3 }
+        default { return 4 }
+    }
+}
+
+function Sort-PackageUpdateItems {
+    param([array]$Items)
+
+    return @($Items | Sort-Object `
+            @{ Expression = { Get-PackageUpdateManagerRank -Manager $_.Manager } }, `
+            @{ Expression = {
+                if ($_.DisplayName) { $_.DisplayName.ToLowerInvariant() }
+                else { $_.Name.ToLowerInvariant() }
+            } })
+}
+
+function Get-PackageManagerBlockedUpdatesExpanded {
+    if ($script:Config.PSObject.Properties['packageManager'] -and
+        $script:Config.packageManager.PSObject.Properties['blockedUpdatesSectionExpanded']) {
+        return [bool]$script:Config.packageManager.blockedUpdatesSectionExpanded
+    }
+    return $false
+}
+
+function Set-PackageManagerBlockedUpdatesExpanded {
+    param([bool]$Expanded)
+
+    $configPath = Join-Path $PSScriptRoot 'config.json'
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        return
+    }
+
+    $configToSave = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    if (-not $configToSave.PSObject.Properties['packageManager']) {
+        $configToSave | Add-Member -NotePropertyName 'packageManager' -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    if ($configToSave.packageManager.PSObject.Properties['blockedUpdatesSectionExpanded']) {
+        $configToSave.packageManager.blockedUpdatesSectionExpanded = $Expanded
+    }
+    else {
+        $configToSave.packageManager | Add-Member -NotePropertyName 'blockedUpdatesSectionExpanded' -NotePropertyValue $Expanded -Force
+    }
+    $configToSave | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $configPath -Encoding UTF8
+    $script:Config = $configToSave
+}
+
+function Show-ManageUpdatesSelection {
+    <#
+    .SYNOPSIS
+    Checkbox UI for Manage Updates: selectable updates first, blocked updates in a collapsible footer.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$SelectableUpdates,
+
+        [Parameter(Mandatory = $true)]
+        [array]$BlockedUpdates
+    )
+
+    $selectable = @($SelectableUpdates)
+    $blocked = @($BlockedUpdates)
+    $blockedExpanded = Get-PackageManagerBlockedUpdatesExpanded
+
+    $selected = @(foreach ($null in $selectable) { $false })
+
+    function Get-TruncatedDisplayText {
+        param([string]$Text)
+        $maxWidth = [Console]::WindowWidth - 10
+        if ($Text.Length -gt $maxWidth) {
+            return $Text.Substring(0, $maxWidth - 3) + '...'
+        }
+        return $Text
+    }
+
+    function Build-ManageUpdateRows {
+        param([bool]$Expanded)
+
+        $rows = [System.Collections.Generic.List[object]]::new()
+        for ($si = 0; $si -lt $selectable.Count; $si++) {
+            [void]$rows.Add(@{ Type = 'selectable'; SelectableIndex = $si; Item = $selectable[$si] })
+        }
+        if ($blocked.Count -gt 0) {
+            [void]$rows.Add(@{ Type = 'header' })
+            if ($Expanded) {
+                foreach ($blockedItem in $blocked) {
+                    [void]$rows.Add(@{ Type = 'blocked'; Item = $blockedItem })
+                }
+            }
+        }
+        return @($rows)
+    }
+
+    $rows = Build-ManageUpdateRows -Expanded $blockedExpanded
+    if ($rows.Count -eq 0) {
+        return @()
+    }
+
+    $currentIndex = 0
+    $done = $false
+
+    $drawUI = {
+        Clear-Host
+        Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║ MANAGE PACKAGE UPDATES                     ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+        Write-Host 'Up/Down navigate, Space select, A/N all/none, Enter install' -ForegroundColor Gray
+        if ($blocked.Count -gt 0) {
+            Write-Host 'Blocked section at bottom: E or Enter on header to expand/collapse' -ForegroundColor Gray
+        }
+        Write-Host 'Press Q to cancel' -ForegroundColor Gray
+        Write-Host ''
+
+        for ($ri = 0; $ri -lt $rows.Count; $ri++) {
+            $row = $rows[$ri]
+            $arrow = if ($ri -eq $currentIndex) { '>' } else { ' ' }
+
+            switch ($row.Type) {
+                'selectable' {
+                    $item = $row.Item
+                    $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
+                    $displayText = Get-TruncatedDisplayText -Text $displayText
+                    $checkbox = if ($selected[$row.SelectableIndex]) { '[x]' } else { '[ ]' }
+                    $line = "$arrow $checkbox $displayText"
+                    if ($ri -eq $currentIndex) {
+                        Write-Host $line -ForegroundColor Green
+                    }
+                    else {
+                        Write-Host $line
+                    }
+                }
+                'header' {
+                    $glyph = if ($blockedExpanded) { [char]0x25BC } else { [char]0x25B6 }
+                    $hint = if ($blockedExpanded) { 'collapse' } else { 'expand' }
+                    $headerText = "$glyph Blocked updates ($($blocked.Count)) - E/Enter to $hint"
+                    $headerText = Get-TruncatedDisplayText -Text $headerText
+                    $line = "$arrow   $headerText"
+                    if ($ri -eq $currentIndex) {
+                        Write-Host $line -ForegroundColor Cyan
+                    }
+                    else {
+                        Write-Host $line -ForegroundColor DarkGray
+                    }
+                }
+                'blocked' {
+                    $item = $row.Item
+                    $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
+                    $displayText = Get-TruncatedDisplayText -Text $displayText
+                    $line = "    [—] $displayText"
+                    if ($ri -eq $currentIndex) {
+                        Write-Host $line -ForegroundColor DarkGray
+                    }
+                    else {
+                        Write-Host $line -ForegroundColor DarkGray
+                    }
+                }
+            }
+        }
+    }
+
+    & $drawUI
+
+    while (-not $done) {
+        $key = [Console]::ReadKey($true)
+        $row = $rows[$currentIndex]
+
+        switch ($key.Key) {
+            'UpArrow' {
+                $currentIndex = ($currentIndex - 1 + $rows.Count) % $rows.Count
+            }
+            'DownArrow' {
+                $currentIndex = ($currentIndex + 1) % $rows.Count
+            }
+            'Spacebar' {
+                if ($row.Type -eq 'selectable') {
+                    $selected[$row.SelectableIndex] = -not $selected[$row.SelectableIndex]
+                }
+            }
+            default {
+                if ($key.KeyChar.ToString().ToUpperInvariant() -eq 'A') {
+                    for ($si = 0; $si -lt $selected.Count; $si++) {
+                        $selected[$si] = $true
+                    }
+                }
+                elseif ($key.KeyChar.ToString().ToUpperInvariant() -eq 'N') {
+                    for ($si = 0; $si -lt $selected.Count; $si++) {
+                        $selected[$si] = $false
+                    }
+                }
+                elseif ($key.KeyChar.ToString().ToUpperInvariant() -eq 'E') {
+                    if ($blocked.Count -gt 0) {
+                        $blockedExpanded = -not $blockedExpanded
+                        Set-PackageManagerBlockedUpdatesExpanded -Expanded $blockedExpanded
+                        $rows = Build-ManageUpdateRows -Expanded $blockedExpanded
+                        if ($currentIndex -ge $rows.Count) {
+                            $currentIndex = [Math]::Max(0, $rows.Count - 1)
+                        }
+                    }
+                }
+            }
+            'Enter' {
+                if ($row.Type -eq 'header' -and $blocked.Count -gt 0) {
+                    $blockedExpanded = -not $blockedExpanded
+                    Set-PackageManagerBlockedUpdatesExpanded -Expanded $blockedExpanded
+                    $rows = Build-ManageUpdateRows -Expanded $blockedExpanded
+                    if ($currentIndex -ge $rows.Count) {
+                        $currentIndex = [Math]::Max(0, $rows.Count - 1)
+                    }
+                }
+                else {
+                    $done = $true
+                }
+            }
+            'Q' {
+                Write-Host "`nCancelled." -ForegroundColor Yellow
+                return $null
+            }
+        }
+
+        & $drawUI
+    }
+
+    $result = @()
+    for ($si = 0; $si -lt $selectable.Count; $si++) {
+        if ($selected[$si]) {
+            $result += $selectable[$si]
+        }
+    }
+    return $result
 }
 
 function Invoke-PackageUninstall {
@@ -1831,15 +2069,19 @@ function Select-PackagesToUpdate {
         return
     }
 
-    # Display available updates with checkboxes using centralized function
-    Write-Host "`nAvailable updates:" -ForegroundColor Yellow
+    $selectableUpdates = Sort-PackageUpdateItems -Items @($availableUpdates | Where-Object { -not $_.Unselectable })
+    $blockedUpdates = Sort-PackageUpdateItems -Items @($availableUpdates | Where-Object { $_.Unselectable })
 
-    $selectedPackages = Show-CheckboxSelection `
-        -Items $availableUpdates `
-        -Title "MANAGE PACKAGE UPDATES" `
-        -Instructions "Use Up/Down arrows to navigate, Space to select/deselect, Enter to install (gray = not selectable)" `
-        -UseClearHost `
-        -AllowAllItemsSelection
+    if ($selectableUpdates.Count -eq 0 -and $blockedUpdates.Count -gt 0) {
+        Write-Host "`nNo installable updates (all candidates blocked by registry or dependencies)." -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "`nAvailable updates:" -ForegroundColor Yellow
+    }
+
+    $selectedPackages = Show-ManageUpdatesSelection `
+        -SelectableUpdates $selectableUpdates `
+        -BlockedUpdates $blockedUpdates
 
     if (-not $selectedPackages -or $selectedPackages.Count -eq 0) {
         if ($null -eq $selectedPackages) {
