@@ -904,9 +904,9 @@ function Show-ManageUpdatesSelection {
 
     function Get-TruncatedDisplayText {
         param([string]$Text)
-        $maxWidth = [Console]::WindowWidth - 10
+        $maxWidth = [Math]::Max(40, [Console]::WindowWidth - 10)
         if ($Text.Length -gt $maxWidth) {
-            return $Text.Substring(0, $maxWidth - 3) + '...'
+            return $Text.Substring(0, [Math]::Max(0, $maxWidth - 3)) + '...'
         }
         return $Text
     }
@@ -914,19 +914,52 @@ function Show-ManageUpdatesSelection {
     function Build-ManageUpdateRows {
         param([bool]$Expanded)
 
-        $rows = [System.Collections.Generic.List[object]]::new()
+        $rowList = [System.Collections.Generic.List[object]]::new()
         for ($si = 0; $si -lt $selectable.Count; $si++) {
-            [void]$rows.Add(@{ Type = 'selectable'; SelectableIndex = $si; Item = $selectable[$si] })
+            [void]$rowList.Add(@{ Type = 'selectable'; SelectableIndex = $si; Item = $selectable[$si] })
+        }
+        if ($selectable.Count -eq 0) {
+            [void]$rowList.Add(@{ Type = 'empty' })
         }
         if ($blocked.Count -gt 0) {
-            [void]$rows.Add(@{ Type = 'header' })
+            [void]$rowList.Add(@{ Type = 'header' })
             if ($Expanded) {
                 foreach ($blockedItem in $blocked) {
-                    [void]$rows.Add(@{ Type = 'blocked'; Item = $blockedItem })
+                    [void]$rowList.Add(@{ Type = 'blocked'; Item = $blockedItem })
                 }
             }
         }
-        return @($rows)
+        if ($rowList.Count -eq 0) {
+            return @()
+        }
+        return @($rowList.ToArray())
+    }
+
+    function Get-ManageUpdateHeaderRowIndex {
+        param([array]$RowSet)
+        for ($i = 0; $i -lt $RowSet.Count; $i++) {
+            if ($RowSet[$i].Type -eq 'header') {
+                return $i
+            }
+        }
+        return -1
+    }
+
+    function Set-ManageUpdateFocusAfterToggle {
+        param(
+            [array]$RowSet,
+            [bool]$Expanded,
+            [ref]$CurrentIndex
+        )
+
+        $headerIdx = Get-ManageUpdateHeaderRowIndex -RowSet $RowSet
+        if ($headerIdx -ge 0 -and -not $Expanded) {
+            $CurrentIndex.Value = $headerIdx
+            return
+        }
+        if ($CurrentIndex.Value -ge $RowSet.Count) {
+            $CurrentIndex.Value = [Math]::Max(0, $RowSet.Count - 1)
+        }
     }
 
     $rows = Build-ManageUpdateRows -Expanded $blockedExpanded
@@ -949,11 +982,29 @@ function Show-ManageUpdatesSelection {
         Write-Host 'Press Q to cancel' -ForegroundColor Gray
         Write-Host ''
 
+        if ($rows.Count -eq 0) {
+            Write-Host '  (No update rows to display.)' -ForegroundColor DarkGray
+            return
+        }
+
         for ($ri = 0; $ri -lt $rows.Count; $ri++) {
             $row = $rows[$ri]
+            if (-not $row.Type) {
+                continue
+            }
             $arrow = if ($ri -eq $currentIndex) { '>' } else { ' ' }
 
             switch ($row.Type) {
+                'empty' {
+                    $line = "$arrow   No installable updates (registry or dependency blocks)."
+                    $line = Get-TruncatedDisplayText -Text $line
+                    if ($ri -eq $currentIndex) {
+                        Write-Host $line -ForegroundColor Yellow
+                    }
+                    else {
+                        Write-Host $line -ForegroundColor DarkYellow
+                    }
+                }
                 'selectable' {
                     $item = $row.Item
                     $displayText = if ($item.DisplayText) { $item.DisplayText } else { $item.ToString() }
@@ -968,7 +1019,7 @@ function Show-ManageUpdatesSelection {
                     }
                 }
                 'header' {
-                    $glyph = if ($blockedExpanded) { [char]0x25BC } else { [char]0x25B6 }
+                    $glyph = if ($blockedExpanded) { 'v' } else { '>' }
                     $hint = if ($blockedExpanded) { 'collapse' } else { 'expand' }
                     $headerText = "$glyph Blocked updates ($($blocked.Count)) - E/Enter to $hint"
                     $headerText = Get-TruncatedDisplayText -Text $headerText
@@ -977,7 +1028,7 @@ function Show-ManageUpdatesSelection {
                         Write-Host $line -ForegroundColor Cyan
                     }
                     else {
-                        Write-Host $line -ForegroundColor DarkGray
+                        Write-Host $line -ForegroundColor White
                     }
                 }
                 'blocked' {
@@ -1030,9 +1081,7 @@ function Show-ManageUpdatesSelection {
                         $blockedExpanded = -not $blockedExpanded
                         Set-PackageManagerBlockedUpdatesExpanded -Expanded $blockedExpanded
                         $rows = Build-ManageUpdateRows -Expanded $blockedExpanded
-                        if ($currentIndex -ge $rows.Count) {
-                            $currentIndex = [Math]::Max(0, $rows.Count - 1)
-                        }
+                        Set-ManageUpdateFocusAfterToggle -RowSet $rows -Expanded $blockedExpanded -CurrentIndex ([ref]$currentIndex)
                     }
                 }
             }
@@ -1041,9 +1090,10 @@ function Show-ManageUpdatesSelection {
                     $blockedExpanded = -not $blockedExpanded
                     Set-PackageManagerBlockedUpdatesExpanded -Expanded $blockedExpanded
                     $rows = Build-ManageUpdateRows -Expanded $blockedExpanded
-                    if ($currentIndex -ge $rows.Count) {
-                        $currentIndex = [Math]::Max(0, $rows.Count - 1)
-                    }
+                    Set-ManageUpdateFocusAfterToggle -RowSet $rows -Expanded $blockedExpanded -CurrentIndex ([ref]$currentIndex)
+                }
+                elseif ($row.Type -in @('empty', 'blocked')) {
+                    # Informational rows only — Enter does not exit
                 }
                 else {
                     $done = $true

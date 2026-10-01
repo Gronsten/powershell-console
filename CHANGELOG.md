@@ -27,9 +27,13 @@ All notable changes to this project have been documented during development.
   (registry or pip constraints) and none were installable, `Sort-PackageUpdateItems` could
   return `$null`, which broke `Show-ManageUpdatesSelection`. Empty selectable lists now
   coerce to `@()` so the blocked-only footer UI still opens.
+- **Manage Updates: collapsed blocked section appeared blank** — Update rows use
+  `.ToArray()` for reliable rendering. Collapsed view shows a yellow empty-state line and a
+  visible `> Blocked updates (N)` header. Enter on blocked or empty rows no longer exits the
+  screen.
 
 **Files Changed:**
-- `console.ps1` — null-safe sort and selection parameters
+- `console.ps1` — null-safe sort and blocked-section display fixes
 
 ### v1.22.4 (2026-10-01)
 
