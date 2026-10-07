@@ -8,7 +8,7 @@ A comprehensive, interactive PowerShell management console for AWS infrastructur
 > **NEW in v1.12.0:** About menu with version info, smart backup tracking (only FULL backups), standardized pause commands, and hidden environment indicator for cleaner UI!
 
 > [!NOTE]
-> **DEV/PROD Environment Separation:** This project uses a dual environment structure (`_dev/` for development, `_prod/` for production) with a smart upgrade script that automatically merges configuration changes while preserving your custom settings.
+> **DEV/PROD Environment Separation:** This project uses a dual environment structure (`_dev/` for development, `_prod/` for production) with a smart upgrade script that automatically merges configuration changes while preserving your custom settings. Develop only in `_dev/`; update `_prod/` by running `upgrade-prod.ps1` in the parent folder (do not edit `_prod/` by hand). Details: [upgrade.md](../upgrade.md).
 
 ## Demo
 

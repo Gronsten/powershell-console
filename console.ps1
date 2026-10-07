@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.22.5"
+$script:ConsoleVersion = "1.22.6"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -802,8 +802,12 @@ function Invoke-WingetPackageUpgrade {
         }
     }
 
-    & winget @wingetArgs
-    return $LASTEXITCODE
+    # Capture winget stdout/stderr so it is not returned as function output (breaks exit-code checks).
+    $wingetOutput = & winget @wingetArgs 2>&1 | Out-String
+    if ($wingetOutput.Trim().Length -gt 0) {
+        Write-Host $wingetOutput.TrimEnd()
+    }
+    return [int]$LASTEXITCODE
 }
 
 function Test-CheckboxItemSelectable {
@@ -1639,6 +1643,47 @@ function Test-PipVersionSatisfiesConstraint {
     return $true
 }
 
+function Get-PipOutputDependencyConflictSummary {
+    param([string]$PipOutput)
+
+    if ([string]::IsNullOrWhiteSpace($PipOutput)) {
+        return $null
+    }
+    if ($PipOutput -notmatch 'dependency conflicts') {
+        return $null
+    }
+
+    $lines = @($PipOutput -split "`r?`n" | Where-Object {
+        $_ -match 'requires .+ but you have .+ which is incompatible'
+    })
+    if ($lines.Count -gt 0) {
+        return ($lines | Select-Object -First 3) -join '; '
+    }
+    return 'pip reported dependency conflicts (see output above)'
+}
+
+function Write-PipUpgradeResult {
+    param(
+        [string]$PackageName,
+        [string]$PipOutput,
+        [int]$ExitCode
+    )
+
+    if ($ExitCode -ne 0) {
+        Write-Host "  ❌ $PackageName update failed (exit $ExitCode)" -ForegroundColor Red
+        return
+    }
+
+    $conflictSummary = Get-PipOutputDependencyConflictSummary -PipOutput $PipOutput
+    if ($conflictSummary) {
+        Write-Host "  ⚠️  $PackageName updated, but pip reported dependency conflicts" -ForegroundColor Yellow
+        Write-Host "      $conflictSummary" -ForegroundColor DarkYellow
+    }
+    else {
+        Write-Host "  ✅ $PackageName updated successfully" -ForegroundColor Green
+    }
+}
+
 function Get-PipUpgradeBlockReason {
     param(
         [string]$PackageName,
@@ -2173,6 +2218,15 @@ function Select-PackagesToUpdate {
                 }
             } elseif ($pkg.Manager -eq "winget") {
                 $wingetExit = Invoke-WingetPackageUpgrade -PackageId $pkg.Name
+                if ($wingetExit -is [array]) {
+                    $wingetExit = ($wingetExit | Select-Object -Last 1)
+                }
+                try {
+                    $wingetExit = [int]$wingetExit
+                }
+                catch {
+                    $wingetExit = 1
+                }
                 if ($wingetExit -eq 0) {
                     Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
                 } else {
@@ -2181,12 +2235,11 @@ function Select-PackagesToUpdate {
             } elseif ($pkg.Manager -eq "pip") {
                 # pip itself requires special update command
                 if ($pkg.Name -eq "pip") {
-                    python.exe -m pip install --upgrade pip
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
-                    } else {
-                        Write-Host "  ❌ $($pkg.Name) update failed (exit $LASTEXITCODE)" -ForegroundColor Red
+                    $pipOutput = python.exe -m pip install --upgrade pip 2>&1 | Out-String
+                    if ($pipOutput.Trim().Length -gt 0) {
+                        Write-Host $pipOutput.TrimEnd()
                     }
+                    Write-PipUpgradeResult -PackageName $pkg.Name -PipOutput $pipOutput -ExitCode $LASTEXITCODE
                 } elseif ($pkg.Unselectable) {
                     Write-Host "  ⚠️  Skipped $($pkg.Name): $($pkg.BlockReason)" -ForegroundColor Yellow
                 } else {
@@ -2194,12 +2247,11 @@ function Select-PackagesToUpdate {
                     if ($blockReason) {
                         Write-Host "  ⚠️  Skipped $($pkg.Name): $blockReason" -ForegroundColor Yellow
                     } else {
-                        pip install --upgrade --upgrade-strategy only-if-needed $pkg.Name
-                        if ($LASTEXITCODE -eq 0) {
-                            Write-Host "  ✅ $($pkg.Name) updated successfully" -ForegroundColor Green
-                        } else {
-                            Write-Host "  ❌ $($pkg.Name) update failed (exit $LASTEXITCODE)" -ForegroundColor Red
+                        $pipOutput = pip install --upgrade --upgrade-strategy only-if-needed $pkg.Name 2>&1 | Out-String
+                        if ($pipOutput.Trim().Length -gt 0) {
+                            Write-Host $pipOutput.TrimEnd()
                         }
+                        Write-PipUpgradeResult -PackageName $pkg.Name -PipOutput $pipOutput -ExitCode $LASTEXITCODE
                     }
                 }
             }
