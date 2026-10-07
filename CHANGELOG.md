@@ -20,6 +20,19 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.6 (2026-10-07)
+
+**Bug Fixes:**
+- **winget: false failure on successful upgrade** — `Invoke-WingetPackageUpgrade` now captures
+  winget stdout/stderr instead of letting it become the function's return value. Fixes cases
+  like Anthropic.Claude showing `update failed (exit Found Claude...)` when install succeeded.
+- **pip: dependency conflict warnings after exit 0** — Successful installs that still print
+  pip's `dependency conflicts` block now show a yellow warning with a short summary instead of
+  a plain green success line.
+
+**Files Changed:**
+- `console.ps1` — winget output capture, `Write-PipUpgradeResult`
+
 ### v1.22.5 (2026-10-01)
 
 **Bug Fixes:**

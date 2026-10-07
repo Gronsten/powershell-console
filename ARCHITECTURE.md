@@ -37,7 +37,7 @@ A comprehensive, interactive PowerShell management console (6,200+ lines) for:
 1. **Single-File Architecture** - All core functionality in [console.ps1](console.ps1:1) (~6,200 lines)
 2. **JSON-Driven Configuration** - All settings in [config.json](config.json:1) with schema versioning
 3. **Interactive Menu System** - Arrow-key navigation with persistent customization
-4. **Environment Separation** - DEV (_dev/) for development, PROD (_prod/) for stable usage
+4. **Environment Separation** - DEV (_dev/) for development, PROD (_prod/) for stable usage. Code changes only in `_dev/`; promote to `_prod/` via `../upgrade-prod.ps1` (never copy or edit `_prod/` directly). See `C:\AppInstall\dev\powershell-console\upgrade.md` and `.cursor/rules/powershell-console-dev-only-no-prod-edits.mdc`.
 5. **Modular Features** - Optional modules in modules/ directory
 6. **Backward Compatibility** - Graceful fallback for old config schemas
 
