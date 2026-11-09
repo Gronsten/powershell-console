@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.22.6"
+$script:ConsoleVersion = "1.22.7"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -7784,7 +7784,16 @@ function Sync-AwsAccountsFromOkta {
     Invoke-StandardPause
 }
 
-function Show-AwsAccountMenu {
+function Get-AwsAccountMenuItems {
+    <#
+    .SYNOPSIS
+    Builds the menu items for the "Select AWS Account/Environment" menu from $script:Config.
+
+    .DESCRIPTION
+    Reads the current $script:Config.environments, applies saved ordering and custom names,
+    and appends the manual-login and Okta sync entries. Called each time the menu is shown
+    so that config changes (e.g. after an Okta sync) appear without restarting the app.
+    #>
     # Helper function to create a menu item for an environment+role
     function New-AwsAccountMenuItem {
         param($envKey, $env, $role = $null)
@@ -7899,7 +7908,16 @@ function Show-AwsAccountMenu {
         Role = $null
     }
 
+    # Comma operator preserves the array when it has a single element
+    return , @($accountItems)
+}
+
+function Show-AwsAccountMenu {
     do {
+        # Rebuild items every iteration so config changes made by the Okta sync
+        # (or any other edit) are reflected without restarting the app
+        $accountItems = Get-AwsAccountMenuItems
+
         $choice = Show-ArrowMenu -MenuItems $accountItems -Title "Select AWS Account/Environment"
 
         if ($choice -eq -1) {

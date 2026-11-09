@@ -20,6 +20,14 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.7 (2026-11-09)
+
+**Bug Fixes:**
+- **AWS account menu stale after Okta sync** — `Show-AwsAccountMenu` built its item list once
+  before the loop, so accounts added by "Sync AWS Accounts from Okta" did not appear until the
+  app was restarted. Menu construction moved into `Get-AwsAccountMenuItems`, which is now called
+  on every loop iteration.
+
 ### v1.22.6 (2026-10-07)
 
 **Bug Fixes:**
