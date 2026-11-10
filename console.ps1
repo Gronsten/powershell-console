@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.22.7"
+$script:ConsoleVersion = "1.22.18"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -6737,6 +6737,24 @@ function Start-AwsWorkflow {
     Show-AwsAccountMenu
 }
 
+function Invoke-OktaAwsCliCommand {
+    param([string]$OktaCommand)
+
+    # Prefer native invocation so $LASTEXITCODE reflects okta-aws-cli failures
+    if ($OktaCommand -match '^okta-aws-cli\s+web(?:\s+--profile\s+(\S+))?(?:\s+--aws-session-duration\s+(\S+))?\s*$') {
+        $cliArgs = @('web')
+        if ($Matches[1]) {
+            $cliArgs += '--profile', $Matches[1]
+        }
+        if ($Matches[2]) {
+            $cliArgs += '--aws-session-duration', $Matches[2]
+        }
+        return & okta-aws-cli @cliArgs 2>&1
+    }
+
+    return Invoke-Expression "$OktaCommand 2>&1"
+}
+
 function Invoke-AwsAuthentication {
     param(
         [string]$Environment,
@@ -6756,8 +6774,21 @@ function Invoke-AwsAuthentication {
             throw "Okta command is empty or null"
         }
 
-        # Execute directly in current session instead of spawning new process
-        Invoke-Expression $OktaCommand
+        $oktaOutput = @(Invoke-OktaAwsCliCommand -OktaCommand $OktaCommand) | Out-String
+        if (-not [string]::IsNullOrWhiteSpace($oktaOutput)) {
+            Write-Host $oktaOutput.TrimEnd()
+        }
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "okta-aws-cli failed (exit code $LASTEXITCODE). Check SAML/Okta role assignment messages above."
+        }
+
+        if ($ProfileName -and $Environment -ne "manual") {
+            $stsCheck = aws sts get-caller-identity --profile $ProfileName 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not verify credentials for profile '$ProfileName'. $stsCheck"
+            }
+        }
 
         Write-Host "Authentication completed successfully!" -ForegroundColor Green
         Write-Host "Current AWS Region: $Region" -ForegroundColor Cyan
@@ -6893,12 +6924,236 @@ function Set-PreferredRole {
     $config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
 }
 
+function Get-AwsEnvironmentDefaultRegion {
+    param([string]$Environment)
+
+    if ($Environment -eq "manual") {
+        if ($script:Config.aws.PSObject.Properties['defaultRegion'] -and $script:Config.aws.defaultRegion) {
+            return $script:Config.aws.defaultRegion
+        }
+        return "us-east-1"
+    }
+
+    $envConfig = $script:Config.environments.$Environment
+    if (-not $envConfig) {
+        if ($script:Config.aws.PSObject.Properties['defaultRegion'] -and $script:Config.aws.defaultRegion) {
+            return $script:Config.aws.defaultRegion
+        }
+        return "us-east-1"
+    }
+
+    if ($envConfig.PSObject.Properties['region'] -and $envConfig.region) {
+        return $envConfig.region
+    }
+
+    if ($script:Config.aws.PSObject.Properties['defaultRegion'] -and $script:Config.aws.defaultRegion) {
+        return $script:Config.aws.defaultRegion
+    }
+
+    return "us-east-1"
+}
+
+function Get-AwsRegionChoices {
+    param([string]$Environment)
+
+    $choices = [System.Collections.Generic.List[string]]::new()
+
+    if ($Environment -eq "manual") {
+        if ($script:Config.aws.PSObject.Properties['defaultRegion'] -and $script:Config.aws.defaultRegion) {
+            [void]$choices.Add($script:Config.aws.defaultRegion)
+        }
+        if ($script:Config.aws.PSObject.Properties['commonRegions'] -and $script:Config.aws.commonRegions) {
+            foreach ($r in @($script:Config.aws.commonRegions)) {
+                if ($r -and $choices -notcontains $r) {
+                    [void]$choices.Add($r)
+                }
+            }
+        }
+        if ($choices.Count -eq 0) {
+            [void]$choices.Add("us-east-1")
+        }
+        return , @($choices)
+    }
+
+    $envConfig = $script:Config.environments.$Environment
+    if (-not $envConfig) {
+        return , @(Get-AwsEnvironmentDefaultRegion -Environment $Environment)
+    }
+
+    if ($envConfig.PSObject.Properties['regions'] -and $envConfig.regions) {
+        foreach ($r in @($envConfig.regions)) {
+            if ($r -and $choices -notcontains $r) {
+                [void]$choices.Add($r)
+            }
+        }
+    }
+
+    $defaultRegion = Get-AwsEnvironmentDefaultRegion -Environment $Environment
+    if ($defaultRegion -and $choices -notcontains $defaultRegion) {
+        $choices.Insert(0, $defaultRegion)
+    }
+
+    if ($choices.Count -eq 0) {
+        [void]$choices.Add($defaultRegion)
+    }
+
+    return , @($choices)
+}
+
+function Select-AwsRegion {
+    param(
+        [string]$Environment,
+        [array]$RegionChoices,
+        [string]$DefaultRegion,
+        [switch]$AllowCustomRegion
+    )
+
+    if (-not $RegionChoices -or $RegionChoices.Count -eq 0) {
+        $RegionChoices = @(Get-AwsRegionChoices -Environment $Environment)
+    }
+
+    if (-not $DefaultRegion) {
+        $DefaultRegion = Get-AwsEnvironmentDefaultRegion -Environment $Environment
+    }
+
+    Write-Host ""
+    Write-Host "Select AWS region for $Environment" -ForegroundColor Yellow
+    Write-Host ""
+
+    $regionMenuItems = @()
+    foreach ($region in $RegionChoices) {
+        $displayText = if ($region -eq $DefaultRegion) {
+            "$region (default)"
+        } else {
+            $region
+        }
+        $regionMenuItems += New-MenuAction $displayText { $region }.GetNewClosure()
+    }
+
+    if ($AllowCustomRegion) {
+        $regionMenuItems += New-MenuAction "Enter custom region..." { }
+    }
+
+    $choice = Show-ArrowMenu -MenuItems $regionMenuItems -Title "Select AWS Region"
+
+    if ($choice -eq -1) {
+        return $null
+    }
+
+    if ($AllowCustomRegion -and $choice -eq $RegionChoices.Count) {
+        $customRegion = (Read-Host "AWS region (e.g. us-east-1)").Trim()
+        if ([string]::IsNullOrWhiteSpace($customRegion)) {
+            Write-Host "No region entered. Selection cancelled." -ForegroundColor Yellow
+            return $null
+        }
+        return $customRegion
+    }
+
+    return $RegionChoices[$choice]
+}
+
+function Set-AwsEnvironmentRegion {
+    param(
+        [string]$Environment,
+        [string]$Region
+    )
+
+    if ($Environment -eq "manual") {
+        return
+    }
+
+    $configPath = Join-Path $PSScriptRoot "config.json"
+    $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+    if (-not $config.environments.$Environment) {
+        Write-Host "Environment '$Environment' not found in config." -ForegroundColor Red
+        return
+    }
+
+    if ($config.environments.$Environment.PSObject.Properties['region']) {
+        $config.environments.$Environment.region = $Region
+    } else {
+        $config.environments.$Environment | Add-Member -NotePropertyName 'region' -NotePropertyValue $Region -Force
+    }
+
+    $config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
+    Update-ScriptConfiguration
+}
+
+function Set-AwsSessionRegion {
+    param([string]$Region)
+
+    if ([string]::IsNullOrWhiteSpace($Region)) {
+        return
+    }
+
+    $env:AWS_DEFAULT_REGION = $Region
+    $global:currentAwsRegion = $Region
+    Write-Host "Session AWS region set to: $Region" -ForegroundColor Green
+}
+
+function Invoke-ChangeAwsRegion {
+    if (-not $global:currentAwsEnvironment) {
+        Write-Host "No active AWS session. Log in first via AWS Login." -ForegroundColor Yellow
+        Invoke-StandardPause
+        return
+    }
+
+    $regionChoices = @(Get-AwsRegionChoices -Environment $global:currentAwsEnvironment)
+    $defaultRegion = if ($global:currentAwsRegion) {
+        $global:currentAwsRegion
+    } else {
+        Get-AwsEnvironmentDefaultRegion -Environment $global:currentAwsEnvironment
+    }
+
+    if ($defaultRegion -and $regionChoices -notcontains $defaultRegion) {
+        $regionChoices = @($defaultRegion) + $regionChoices
+    }
+
+    $selectedRegion = Select-AwsRegion -Environment $global:currentAwsEnvironment `
+        -RegionChoices $regionChoices `
+        -DefaultRegion $defaultRegion `
+        -AllowCustomRegion
+
+    if (-not $selectedRegion) {
+        Write-Host "Region change cancelled." -ForegroundColor Yellow
+        Invoke-StandardPause
+        return
+    }
+
+    Set-AwsSessionRegion -Region $selectedRegion
+
+    if ($global:currentAwsEnvironment -ne "manual") {
+        $save = Read-Host "Save '$selectedRegion' as the default region for '$($global:currentAwsEnvironment)' in config.json? (y/N)"
+        if ($save -match '^[yY]') {
+            Set-AwsEnvironmentRegion -Environment $global:currentAwsEnvironment -Region $selectedRegion
+            Write-Host "✓ Default region saved to config.json" -ForegroundColor Green
+        }
+    }
+
+    Invoke-StandardPause
+}
+
 function Start-AwsLoginForAccount {
     param(
         [string]$Environment,
         [string]$Region,
         [string]$PreselectedRole = $null
     )
+
+    $regionChoices = @(Get-AwsRegionChoices -Environment $Environment)
+    $defaultRegion = if ($Region) { $Region } else { Get-AwsEnvironmentDefaultRegion -Environment $Environment }
+
+    if ($regionChoices.Count -gt 1) {
+        $pickedRegion = Select-AwsRegion -Environment $Environment -RegionChoices $regionChoices -DefaultRegion $defaultRegion -AllowCustomRegion
+        if (-not $pickedRegion) {
+            Write-Host "Region selection cancelled. Returning to menu." -ForegroundColor Yellow
+            return
+        }
+        $Region = $pickedRegion
+    } elseif (-not $Region) {
+        $Region = $defaultRegion
+    }
 
     Write-Host "Authenticating with AWS Account: $Environment ($Region)" -ForegroundColor Cyan
 
@@ -6960,8 +7215,16 @@ function Start-AwsLoginForAccount {
 function Start-ManualAwsLogin {
     Write-Host "Manual AWS Login - You will select account in browser" -ForegroundColor Cyan
 
+    $regionChoices = @(Get-AwsRegionChoices -Environment "manual")
+    $defaultRegion = Get-AwsEnvironmentDefaultRegion -Environment "manual"
+    $Region = Select-AwsRegion -Environment "manual" -RegionChoices $regionChoices -DefaultRegion $defaultRegion -AllowCustomRegion
+    if (-not $Region) {
+        Write-Host "Region selection cancelled. Returning to menu." -ForegroundColor Yellow
+        return
+    }
+
     $oktaCommand = "okta-aws-cli web"
-    Invoke-AwsAuthentication -Environment "manual" -Region "unknown" -OktaCommand $oktaCommand
+    Invoke-AwsAuthentication -Environment "manual" -Region $Region -OktaCommand $oktaCommand
 }
 
 function Backup-ConfigFile {
@@ -7049,6 +7312,554 @@ function Get-AccountRolesFromProfile {
     return @{ Valid = $false }
 }
 
+function Get-IamMaxSessionDurationTargetSeconds {
+    $defaultSeconds = 43200
+    if ($script:Config.aws.PSObject.Properties['iamMaxSessionDurationSeconds']) {
+        $parsed = 0
+        if ([int]::TryParse([string]$script:Config.aws.iamMaxSessionDurationSeconds, [ref]$parsed) -and $parsed -gt 0) {
+            return $parsed
+        }
+    }
+    return $defaultSeconds
+}
+
+function Format-AwsSessionDurationLabel {
+    param([int]$Seconds)
+
+    if ($Seconds -ge 3600 -and ($Seconds % 3600) -eq 0) {
+        $hours = $Seconds / 3600
+        return "${hours}h"
+    }
+
+    return "${Seconds}s"
+}
+
+function Add-OktaYamlProfileSessionCandidate {
+    param(
+        $Results,
+        [string]$ProfileName,
+        [int]$DurationSeconds,
+        [string]$AccountId,
+        [string]$RoleName,
+        [int]$TargetSeconds
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ProfileName) -or $DurationSeconds -le 0) {
+        return
+    }
+
+    if ($DurationSeconds -ge $TargetSeconds) {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RoleName)) {
+        if ($ProfileName -match '-CFA-OKTA-PROD-(.+)$') {
+            $RoleName = $Matches[1]
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RoleName)) {
+        return
+    }
+
+    [void]$Results.Add([PSCustomObject]@{
+        ProfileName        = $ProfileName
+        RoleName           = $RoleName
+        AccountId          = $AccountId
+        CurrentYamlSeconds = $DurationSeconds
+    })
+}
+
+function Get-OktaYamlProfilesBelowSessionDuration {
+    param(
+        [string]$YamlContent,
+        [int]$TargetSeconds
+    )
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    $inProfiles = $false
+    $currentProfile = $null
+    $currentDuration = 0
+    $currentAccountId = $null
+    $currentRoleName = $null
+
+    foreach ($line in ($YamlContent -split '\r?\n')) {
+        if ($line -match '^\s{2}profiles:\s*$') {
+            if ($currentProfile) {
+                Add-OktaYamlProfileSessionCandidate -Results $results `
+                    -ProfileName ([string]$currentProfile) `
+                    -DurationSeconds ([int]$currentDuration) `
+                    -AccountId ([string]$currentAccountId) `
+                    -RoleName ([string]$currentRoleName) `
+                    -TargetSeconds $TargetSeconds
+            }
+            $currentProfile = $null
+            $currentDuration = 0
+            $currentAccountId = $null
+            $currentRoleName = $null
+            $inProfiles = $true
+            continue
+        }
+
+        if (-not $inProfiles) {
+            continue
+        }
+
+        # End of profiles section (another awscli subsection at 2-space indent)
+        if ($line -match '^\s{2}\S') {
+            if ($currentProfile) {
+                Add-OktaYamlProfileSessionCandidate -Results $results `
+                    -ProfileName ([string]$currentProfile) `
+                    -DurationSeconds ([int]$currentDuration) `
+                    -AccountId ([string]$currentAccountId) `
+                    -RoleName ([string]$currentRoleName) `
+                    -TargetSeconds $TargetSeconds
+            }
+            $inProfiles = $false
+            continue
+        }
+
+        if ($line -match '^\s{4}(\S+):\s*$') {
+            if ($currentProfile) {
+                Add-OktaYamlProfileSessionCandidate -Results $results `
+                    -ProfileName ([string]$currentProfile) `
+                    -DurationSeconds ([int]$currentDuration) `
+                    -AccountId ([string]$currentAccountId) `
+                    -RoleName ([string]$currentRoleName) `
+                    -TargetSeconds $TargetSeconds
+            }
+            $currentProfile = [string]$Matches[1]
+            $currentDuration = 0
+            $currentAccountId = $null
+            $currentRoleName = $null
+            continue
+        }
+
+        if ($line -match '^\s{6}aws-session-duration:\s*(\d+)\s*$') {
+            $currentDuration = [int]$Matches[1]
+            continue
+        }
+
+        if ($line -match '^\s{6}aws-iam-role:\s*"arn:aws:iam::(\d+):role/([^"]+)"\s*$') {
+            $currentAccountId = [string]$Matches[1]
+            $currentRoleName = [string]$Matches[2]
+        }
+    }
+
+    if ($currentProfile) {
+        Add-OktaYamlProfileSessionCandidate -Results $results `
+            -ProfileName ([string]$currentProfile) `
+            -DurationSeconds ([int]$currentDuration) `
+            -AccountId ([string]$currentAccountId) `
+            -RoleName ([string]$currentRoleName) `
+            -TargetSeconds $TargetSeconds
+    }
+
+    if ($results.Count -eq 0) {
+        return @()
+    }
+
+    return ,@($results.ToArray())
+}
+
+function Set-OktaYamlProfileSessionDurationInFile {
+    param(
+        [string]$YamlContent,
+        [string]$ProfileName,
+        [int]$DurationSeconds
+    )
+
+    $escapedProfile = [regex]::Escape($ProfileName)
+    $profilePattern = "(?m)(^\s{4}${escapedProfile}:\s*(?:\r?\n\s{6}[^\r\n]+\s*)*?\s{6}aws-session-duration:\s*)(\d+)"
+
+    if ($YamlContent -match $profilePattern) {
+        $currentDuration = [int]$Matches[2]
+        if ($currentDuration -ne $DurationSeconds) {
+            $updated = $YamlContent -replace $profilePattern, "`${1}$DurationSeconds"
+            return @{ Content = $updated; Changed = $true }
+        }
+    }
+
+    return @{ Content = $YamlContent; Changed = $false }
+}
+
+function Invoke-UpdateIamRoleMaxSessionDurations {
+    $targetSeconds = Get-IamMaxSessionDurationTargetSeconds
+    $targetLabel = Format-AwsSessionDurationLabel -Seconds $targetSeconds
+    $oktaYamlPath = $script:Config.paths.oktaYamlPath
+
+    Write-Host ""
+    Write-Host "Raise IAM role MaxSessionDuration to $targetLabel ($targetSeconds seconds)" -ForegroundColor Cyan
+    Write-Host "Uses aws-session-duration from okta.yaml (written during Sync step 3.5)." -ForegroundColor Gray
+    Write-Host "Profiles below $targetSeconds get aws iam update-role (requires iam:UpdateRole)." -ForegroundColor Gray
+    Write-Host ""
+
+    if (-not $oktaYamlPath -or -not (Test-Path -LiteralPath $oktaYamlPath)) {
+        Write-Host "Okta YAML not found at: $oktaYamlPath" -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+
+    $yamlContent = Get-Content -LiteralPath $oktaYamlPath -Raw
+    $candidates = @(Get-OktaYamlProfilesBelowSessionDuration -YamlContent $yamlContent -TargetSeconds $targetSeconds)
+
+    if ($candidates.Count -eq 0) {
+        Write-Host "All okta.yaml profiles are already at $targetLabel or higher." -ForegroundColor Green
+        Write-Host "Run Sync first if the file may be out of date." -ForegroundColor DarkGray
+        Invoke-StandardPause
+        return
+    }
+
+    Write-Host "Profiles below $targetLabel ($($candidates.Count)):" -ForegroundColor Yellow
+    foreach ($item in ($candidates | Sort-Object ProfileName)) {
+        $currentLabel = Format-AwsSessionDurationLabel -Seconds ([int]$item.CurrentYamlSeconds)
+        $accountLabel = if ($item.AccountId) { $item.AccountId } else { "?" }
+        Write-Host "  $($item.ProfileName)" -ForegroundColor White
+        Write-Host "    Role: $($item.RoleName) | Account: $accountLabel | YAML: $currentLabel -> $targetLabel" -ForegroundColor Gray
+    }
+    Write-Host ""
+    Write-Host "Command: aws iam update-role --role-name <role> --max-session-duration $targetSeconds --profile <profile>" -ForegroundColor DarkGray
+    Write-Host ""
+
+    $confirm = Read-Host "Apply IAM updates? (Y/n)"
+    if ($confirm -match '^[nN]') {
+        Write-Host "Cancelled." -ForegroundColor Yellow
+        Invoke-StandardPause
+        return
+    }
+
+    $yamlBackup = Backup-ConfigFile -FilePath $oktaYamlPath
+    if ($yamlBackup) {
+        Write-Host "Okta YAML backup: $yamlBackup" -ForegroundColor Gray
+    }
+
+    $successCount = 0
+    $failCount = 0
+    $yamlChanged = $false
+
+    foreach ($item in ($candidates | Sort-Object ProfileName)) {
+        Write-Host "Updating $($item.RoleName) ($($item.ProfileName))..." -ForegroundColor Cyan
+        $updateOutput = aws iam update-role `
+            --role-name $item.RoleName `
+            --max-session-duration $targetSeconds `
+            --profile $item.ProfileName 2>&1 | Out-String
+
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  ✓ IAM MaxSessionDuration -> $targetSeconds" -ForegroundColor Green
+            $successCount++
+
+            $yamlResult = Set-OktaYamlProfileSessionDurationInFile `
+                -YamlContent $yamlContent `
+                -ProfileName $item.ProfileName `
+                -DurationSeconds $targetSeconds
+            if ($yamlResult.Changed) {
+                $yamlContent = $yamlResult.Content
+                $yamlChanged = $true
+            }
+        }
+        else {
+            Write-Host "  ✗ Failed: $updateOutput" -ForegroundColor Red
+            $failCount++
+        }
+    }
+
+    if ($yamlChanged) {
+        Set-Content -LiteralPath $oktaYamlPath -Value $yamlContent -Encoding UTF8
+        Write-Host "Updated okta.yaml aws-session-duration for successful role(s)." -ForegroundColor Green
+    }
+
+    Write-Host ""
+    Write-Host "Complete: $successCount succeeded, $failCount failed." -ForegroundColor $(if ($failCount -eq 0) { 'Green' } else { 'Yellow' })
+    if ($successCount -gt 0) {
+        Write-Host "Run Sync to refresh config.json sessionDuration fields, then re-login." -ForegroundColor Yellow
+    }
+    Write-Host ""
+    Invoke-StandardPause
+}
+
+function Test-AwsEnvironmentExcludedFromAccountMenu {
+    param(
+        [string]$EnvKey,
+        $EnvConfig = $null
+    )
+
+    if ($EnvKey -eq "exampleaccount") {
+        return $true
+    }
+
+    if ($EnvConfig) {
+        if ($EnvConfig.PSObject.Properties['isExample'] -and $EnvConfig.isExample) {
+            return $true
+        }
+        if ($EnvConfig.PSObject.Properties['accountId'] -and $EnvConfig.accountId -eq "123456789012") {
+            return $true
+        }
+    }
+
+    if ($EnvKey -eq "manual") {
+        if ($script:Config.aws.PSObject.Properties['includeManualAccountMenuItem']) {
+            return -not [bool]$script:Config.aws.includeManualAccountMenuItem
+        }
+        return $true
+    }
+
+    return $false
+}
+
+function Find-TerraformPathsForEnvironmentKey {
+    param(
+        [string]$DevRoot,
+        [string]$EnvKey,
+        [int]$MaxDepth = 4
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DevRoot) -or -not (Test-Path -LiteralPath $DevRoot)) {
+        return @()
+    }
+
+    $found = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+    function Search-DevTreeForTerraformEnv {
+        param(
+            [string]$Path,
+            [int]$Depth
+        )
+
+        if ($Depth -gt $MaxDepth) {
+            return
+        }
+
+        $terraformPath = Join-Path $Path "terraform"
+        if (Test-Path -LiteralPath $terraformPath) {
+            $envPath = Join-Path $terraformPath $EnvKey
+            if (Test-Path -LiteralPath $envPath) {
+                [void]$found.Add((Resolve-Path -LiteralPath $envPath).Path)
+            }
+        }
+
+        if ($Depth -lt $MaxDepth) {
+            Get-ChildItem -LiteralPath $Path -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                Search-DevTreeForTerraformEnv -Path $_.FullName -Depth ($Depth + 1)
+            }
+        }
+    }
+
+    Search-DevTreeForTerraformEnv -Path $DevRoot -Depth 0
+    return , @($found)
+}
+
+function Update-AwsPromptDirectoryMappingsFromDevTree {
+    param(
+        [Parameter(Mandatory = $true)]
+        $ConfigObject
+    )
+
+    $syncEnabled = $true
+    if ($ConfigObject.aws.PSObject.Properties['syncDiscoverTerraformDirectoryMappings']) {
+        $syncEnabled = [bool]$ConfigObject.aws.syncDiscoverTerraformDirectoryMappings
+    }
+    if (-not $syncEnabled) {
+        return @()
+    }
+
+    $devRoot = $null
+    if ($ConfigObject.paths.PSObject.Properties['devRoot']) {
+        $devRoot = $ConfigObject.paths.devRoot
+    }
+    if ([string]::IsNullOrWhiteSpace($devRoot)) {
+        Write-Host "  Skipping terraform directory discovery (paths.devRoot not set)" -ForegroundColor DarkGray
+        return @()
+    }
+
+    if (-not $ConfigObject.awsPromptIndicator) {
+        $ConfigObject | Add-Member -NotePropertyName 'awsPromptIndicator' -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    if (-not $ConfigObject.awsPromptIndicator.PSObject.Properties['directoryMappings']) {
+        $ConfigObject.awsPromptIndicator | Add-Member -NotePropertyName 'directoryMappings' -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+
+    $mappings = $ConfigObject.awsPromptIndicator.directoryMappings
+    $addedOrUpdated = @()
+
+    foreach ($envProp in $ConfigObject.environments.PSObject.Properties) {
+        $envKey = $envProp.Name
+        $envConfig = $envProp.Value
+
+        if (Test-AwsEnvironmentExcludedFromAccountMenu -EnvKey $envKey -EnvConfig $envConfig) {
+            continue
+        }
+
+        if (-not $envConfig.PSObject.Properties['accountId'] -or -not $envConfig.accountId) {
+            continue
+        }
+
+        $accountId = $envConfig.accountId
+        $terraformPaths = Find-TerraformPathsForEnvironmentKey -DevRoot $devRoot -EnvKey $envKey
+
+        foreach ($dirPath in $terraformPaths) {
+            $mappingKey = $dirPath.Replace('/', '\')
+            $existingValue = $null
+            $hasMapping = $false
+
+            foreach ($mappingProp in $mappings.PSObject.Properties) {
+                if ($mappingProp.Name -eq $mappingKey) {
+                    $hasMapping = $true
+                    $existingValue = $mappingProp.Value
+                    break
+                }
+            }
+
+            if (-not $hasMapping) {
+                $mappings | Add-Member -NotePropertyName $mappingKey -NotePropertyValue $accountId -Force
+                Write-Host "  ✓ Added prompt directory mapping: $mappingKey -> $accountId" -ForegroundColor Green
+                $addedOrUpdated += $mappingKey
+            }
+            elseif ($existingValue -ne $accountId) {
+                $mappings.$mappingKey = $accountId
+                Write-Host "  Updated prompt directory mapping: $mappingKey ($existingValue -> $accountId)" -ForegroundColor Yellow
+                $addedOrUpdated += $mappingKey
+            }
+        }
+    }
+
+    return $addedOrUpdated
+}
+
+function Get-StaleAwsConfigEnvironments {
+    param(
+        $ConfigObject,
+        [System.Collections.Generic.HashSet[string]]$DiscoveredAccountIds
+    )
+
+    $stale = @()
+    foreach ($envKey in $ConfigObject.environments.PSObject.Properties.Name) {
+        $env = $ConfigObject.environments.$envKey
+        if (Test-AwsEnvironmentExcludedFromAccountMenu -EnvKey $envKey -EnvConfig $env) {
+            continue
+        }
+        if (-not $env.PSObject.Properties['accountId'] -or -not $env.accountId) {
+            continue
+        }
+        if (-not $DiscoveredAccountIds.Contains($env.accountId)) {
+            $stale += [PSCustomObject]@{
+                Environment = $envKey
+                AccountId   = $env.accountId
+                DisplayName = if ($env.PSObject.Properties['displayName'] -and $env.displayName) { $env.displayName } else { $envKey }
+            }
+        }
+    }
+    return $stale
+}
+
+function Remove-AwsPromptDirectoryMappingsForAccountId {
+    param(
+        $ConfigObject,
+        [string]$AccountId
+    )
+
+    if (-not $ConfigObject.awsPromptIndicator.PSObject.Properties['directoryMappings']) {
+        return 0
+    }
+
+    $removed = 0
+    $toRemove = @()
+    foreach ($prop in $ConfigObject.awsPromptIndicator.directoryMappings.PSObject.Properties) {
+        if ([string]$prop.Value -eq $AccountId) {
+            $toRemove += $prop.Name
+        }
+    }
+    foreach ($key in $toRemove) {
+        $ConfigObject.awsPromptIndicator.directoryMappings.PSObject.Properties.Remove($key)
+        $removed++
+    }
+    return $removed
+}
+
+function Remove-AwsAccountMenuOrderEntriesForEnvironment {
+    param(
+        $ConfigObject,
+        [string]$EnvironmentKey
+    )
+
+    if (-not $ConfigObject.PSObject.Properties['awsAccountMenuOrder'] -or -not $ConfigObject.awsAccountMenuOrder) {
+        return
+    }
+
+    $prefix = "${EnvironmentKey}:"
+    $ConfigObject.awsAccountMenuOrder = @(
+        $ConfigObject.awsAccountMenuOrder | Where-Object {
+            $_ -ne $EnvironmentKey -and $_ -notlike "${prefix}*"
+        }
+    )
+}
+
+function Remove-OktaYamlDataForAccountId {
+    param(
+        [string]$YamlContent,
+        [string]$AccountId
+    )
+
+    $acctPattern = [regex]::Escape("arn:aws:iam::${AccountId}:")
+    $output = [System.Collections.Generic.List[string]]::new()
+    $inProfiles = $false
+    $profileBlock = $null
+
+    function Complete-OktaYamlProfileBlock {
+        param($BlockLines)
+
+        if (-not $BlockLines -or $BlockLines.Count -eq 0) {
+            return
+        }
+
+        $blockText = $BlockLines -join "`n"
+        if ($blockText -match $acctPattern) {
+            return
+        }
+
+        foreach ($blockLine in $BlockLines) {
+            [void]$output.Add($blockLine)
+        }
+    }
+
+    foreach ($line in ($YamlContent -split '\r?\n')) {
+        if ($line -match '^\s{2}profiles:\s*$') {
+            Complete-OktaYamlProfileBlock -BlockLines $profileBlock
+            $profileBlock = $null
+            $inProfiles = $true
+            [void]$output.Add($line)
+            continue
+        }
+
+        if ($inProfiles -and $line -match '^\s{2}\S') {
+            Complete-OktaYamlProfileBlock -BlockLines $profileBlock
+            $profileBlock = $null
+            $inProfiles = $false
+        }
+
+        if ($inProfiles) {
+            if ($line -match '^\s{4}(\S+):\s*$') {
+                Complete-OktaYamlProfileBlock -BlockLines $profileBlock
+                $profileBlock = @($line)
+            }
+            elseif ($profileBlock) {
+                $profileBlock += $line
+            }
+            else {
+                [void]$output.Add($line)
+            }
+            continue
+        }
+
+        if ($line -match $acctPattern) {
+            continue
+        }
+        [void]$output.Add($line)
+    }
+
+    Complete-OktaYamlProfileBlock -BlockLines $profileBlock
+    return (($output -join "`n").TrimEnd() + "`n")
+}
+
 function Sync-AwsAccountsFromOkta {
     Write-Host "`n╔════════════════════════════════════════════╗" -ForegroundColor Magenta
     Write-Host "║  SYNC AWS ACCOUNTS FROM OKTA               ║" -ForegroundColor Magenta
@@ -7060,6 +7871,8 @@ function Sync-AwsAccountsFromOkta {
     Write-Host "  3. Compare with your current config.json" -ForegroundColor White
     Write-Host "  4. Show you what will change" -ForegroundColor White
     Write-Host "  5. Update config.json and okta.yaml (after confirmation)" -ForegroundColor White
+    Write-Host "  6. Remove environments no longer returned by Okta (optional confirmation)" -ForegroundColor White
+    Write-Host "  7. Scan paths.devRoot for terraform\<account> folders and add AWS prompt mappings" -ForegroundColor White
     Write-Host ""
 
     $confirm = Read-Host "Continue with sync? (Y/n)"
@@ -7258,6 +8071,9 @@ function Sync-AwsAccountsFromOkta {
 
         foreach ($envKey in $config.environments.PSObject.Properties.Name) {
             $env = $config.environments.$envKey
+            if (Test-AwsEnvironmentExcludedFromAccountMenu -EnvKey $envKey -EnvConfig $env) {
+                continue
+            }
             if ($env.PSObject.Properties['accountId'] -and $env.accountId -eq $accountId) {
                 $existingEnv = $envKey
                 # Check if the key name needs to be updated to match Okta friendly name
@@ -7272,6 +8088,10 @@ function Sync-AwsAccountsFromOkta {
         # (handles cases where old entry exists without accountId)
         if (-not $existingEnv) {
             foreach ($envKey in $config.environments.PSObject.Properties.Name) {
+                $env = $config.environments.$envKey
+                if (Test-AwsEnvironmentExcludedFromAccountMenu -EnvKey $envKey -EnvConfig $env) {
+                    continue
+                }
                 # Check if the key is similar to friendly name (case-insensitive, ignore hyphens)
                 $normalizedKey = ($envKey -replace '-', '' -replace '_', '').ToLower()
                 $normalizedFriendly = ($friendlyName -replace '-', '' -replace '_', '').ToLower()
@@ -7290,6 +8110,11 @@ function Sync-AwsAccountsFromOkta {
         foreach ($envKey in $config.environments.PSObject.Properties.Name) {
             # Skip the entry we already found (if any)
             if ($existingEnv -and $envKey -eq $existingEnv) {
+                continue
+            }
+
+            $env = $config.environments.$envKey
+            if (Test-AwsEnvironmentExcludedFromAccountMenu -EnvKey $envKey -EnvConfig $env) {
                 continue
             }
 
@@ -7479,15 +8304,31 @@ function Sync-AwsAccountsFromOkta {
 
             $newRoles = $info.Roles | Where-Object { $_ -notin $currentRoles }
 
+            $removedRoles = @($currentRoles | Where-Object { $_ -notin $info.Roles })
+            if ($removedRoles.Count -gt 0) {
+                Write-Host "  Updating account $accountId ($existingEnv) - removing roles no longer in Okta: $($removedRoles -join ', ')" -ForegroundColor Yellow
+                $needsUpdate = $true
+                foreach ($staleRole in $removedRoles) {
+                    if ($config.environments.$existingEnv.oktaProfileMap.PSObject.Properties[$staleRole]) {
+                        $config.environments.$existingEnv.oktaProfileMap.PSObject.Properties.Remove($staleRole)
+                    }
+                }
+            }
+
             if ($newRoles.Count -gt 0) {
                 Write-Host "  Updating account $accountId ($existingEnv) - adding roles: $($newRoles -join ', ')" -ForegroundColor Yellow
                 $needsUpdate = $true
+            }
 
-                # Update available roles
-                $allRoles = @($currentRoles) + @($newRoles) | Sort-Object -Unique
+            $allRoles = @($info.Roles | Sort-Object -Unique)
+            if (@($currentRoles | Sort-Object -Unique) -join ',' -ne ($allRoles -join ',')) {
                 $config.environments.$existingEnv.availableRoles = $allRoles
-            } else {
-                $allRoles = $currentRoles
+                $needsUpdate = $true
+            }
+
+            if ($config.environments.$existingEnv.preferredRole -notin $allRoles -and $allRoles.Count -gt 0) {
+                $config.environments.$existingEnv.preferredRole = $allRoles[0]
+                $needsUpdate = $true
             }
 
             # Always ensure oktaProfileMap exists and has entries for ALL roles
@@ -7607,11 +8448,58 @@ function Sync-AwsAccountsFromOkta {
         }
     }
 
+    $discoveredAccountIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($discoveredId in $discoveredAccounts.Keys) {
+        [void]$discoveredAccountIds.Add([string]$discoveredId)
+    }
+
+    Write-Host ""
+    Write-Host "══ Step 5.5: Accounts no longer in Okta sync ══" -ForegroundColor Cyan
+    $removedEnvironments = @(Get-StaleAwsConfigEnvironments -ConfigObject $config -DiscoveredAccountIds $discoveredAccountIds)
+    $removedEnvironmentNames = @()
+
+    if ($removedEnvironments.Count -eq 0) {
+        Write-Host "  No stale account environments in config.json" -ForegroundColor Green
+    }
+    else {
+        Write-Host "  These environments are in config.json but were not returned by Okta:" -ForegroundColor Yellow
+        foreach ($stale in $removedEnvironments) {
+            Write-Host "    - $($stale.Environment) ($($stale.AccountId)) — $($stale.DisplayName)" -ForegroundColor White
+        }
+        Write-Host ""
+        $removeConfirm = Read-Host "Remove them from config.json and clean okta.yaml references? (Y/n)"
+        if ($removeConfirm -notmatch '^[nN]') {
+            foreach ($stale in $removedEnvironments) {
+                if ($config.environments.PSObject.Properties[$stale.Environment]) {
+                    $config.environments.PSObject.Properties.Remove($stale.Environment)
+                    Remove-AwsAccountMenuOrderEntriesForEnvironment -ConfigObject $config -EnvironmentKey $stale.Environment
+                    $mappingCount = Remove-AwsPromptDirectoryMappingsForAccountId -ConfigObject $config -AccountId $stale.AccountId
+                    Write-Host "  ✓ Removed environment: $($stale.Environment) (account $($stale.AccountId), $mappingCount mapping(s))" -ForegroundColor Green
+                    $removedEnvironmentNames += $stale.Environment
+                    $updatedAccounts += $stale.Environment
+                }
+            }
+        }
+        else {
+            Write-Host "  Keeping stale environments in config.json" -ForegroundColor Gray
+        }
+    }
+
     # Update okta.yaml (idps, roles, and profiles) to match discovered accounts
     Write-Host "`n══ Step 6: Updating okta.yaml ══" -ForegroundColor Cyan
     Write-Host ""
 
     $oktaYamlContent = Get-Content $oktaYamlPath -Raw
+
+    if ($removedEnvironmentNames.Count -gt 0) {
+        Write-Host "Pruning okta.yaml for removed account(s)..." -ForegroundColor Gray
+        foreach ($stale in $removedEnvironments) {
+            if ($removedEnvironmentNames -contains $stale.Environment) {
+                $oktaYamlContent = Remove-OktaYamlDataForAccountId -YamlContent $oktaYamlContent -AccountId $stale.AccountId
+                Write-Host "  ✓ Removed okta.yaml entries for account $($stale.AccountId)" -ForegroundColor Green
+            }
+        }
+    }
     $idpsAdded = @()
     $rolesAdded = @()
     $profilesAdded = @()
@@ -7715,7 +8603,7 @@ function Sync-AwsAccountsFromOkta {
     }
 
     # Save changes if any were made
-    $totalChanges = $idpsAdded.Count + $rolesAdded.Count + $profilesAdded.Count + $profilesUpdated.Count
+    $totalChanges = $idpsAdded.Count + $rolesAdded.Count + $profilesAdded.Count + $profilesUpdated.Count + $removedEnvironmentNames.Count
     if ($totalChanges -gt 0) {
         Write-Host ""
         Write-Host "Saving changes to okta.yaml..." -ForegroundColor Yellow
@@ -7737,8 +8625,15 @@ function Sync-AwsAccountsFromOkta {
         Write-Host "  No changes needed in okta.yaml - all sections are up to date" -ForegroundColor Green
     }
 
+    Write-Host ""
+    Write-Host "══ Step 7: Discovering terraform directories (AWS prompt mappings) ══" -ForegroundColor Cyan
+    $terraformMappingUpdates = Update-AwsPromptDirectoryMappingsFromDevTree -ConfigObject $config
+    if ($terraformMappingUpdates.Count -eq 0) {
+        Write-Host "  No new terraform directory mappings found under paths.devRoot" -ForegroundColor Green
+    }
+
     # Save updated config.json
-    if ($newAccounts.Count -gt 0 -or $updatedAccounts.Count -gt 0) {
+    if ($newAccounts.Count -gt 0 -or $updatedAccounts.Count -gt 0 -or $terraformMappingUpdates.Count -gt 0 -or $removedEnvironmentNames.Count -gt 0) {
         Write-Host ""
         Write-Host "Saving changes to config.json..." -ForegroundColor Yellow
 
@@ -7767,6 +8662,18 @@ function Sync-AwsAccountsFromOkta {
                 Write-Host "    - $acc" -ForegroundColor White
             }
         }
+        if ($removedEnvironmentNames.Count -gt 0) {
+            Write-Host "  Environments Removed: $($removedEnvironmentNames.Count)" -ForegroundColor Cyan
+            foreach ($acc in $removedEnvironmentNames) {
+                Write-Host "    - $acc" -ForegroundColor White
+            }
+        }
+        if ($terraformMappingUpdates.Count -gt 0) {
+            Write-Host "  Prompt directory mappings added/updated: $($terraformMappingUpdates.Count)" -ForegroundColor Cyan
+            foreach ($path in $terraformMappingUpdates) {
+                Write-Host "    - $path" -ForegroundColor White
+            }
+        }
         Write-Host "═══════════════════════════════════════════" -ForegroundColor Green
         Write-Host ""
 
@@ -7777,7 +8684,11 @@ function Sync-AwsAccountsFromOkta {
         Write-Host ""
     }
     else {
-        Write-Host "No changes needed - all accounts are up to date." -ForegroundColor Green
+        if ($terraformMappingUpdates.Count -gt 0) {
+            Write-Host "Account definitions were already up to date; prompt directory mappings were updated." -ForegroundColor Green
+        } else {
+            Write-Host "No changes needed - all accounts are up to date." -ForegroundColor Green
+        }
         Write-Host ""
     }
 
@@ -7841,16 +8752,17 @@ function Get-AwsAccountMenuItems {
     foreach ($envKey in $script:Config.environments.PSObject.Properties.Name) {
         $env = $script:Config.environments.$envKey
 
-        # Skip manual - it will be added at the end
-        if ($envKey -eq "manual") {
-            $customName = Get-AwsAccountCustomName -Environment $envKey -Role $null
-            $specialItems += @{
-                Text = if ($customName) { $customName } else { $env.displayName }
-                HighlightPos = $env.highlightPos
-                HighlightChar = $env.highlightChar
-                Environment = $envKey
-                Region = $env.region
-                Role = $null
+        if (Test-AwsEnvironmentExcludedFromAccountMenu -EnvKey $envKey -EnvConfig $env) {
+            if ($envKey -eq "manual" -and $script:Config.aws.PSObject.Properties['includeManualAccountMenuItem'] -and $script:Config.aws.includeManualAccountMenuItem) {
+                $customName = Get-AwsAccountCustomName -Environment $envKey -Role $null
+                $specialItems += @{
+                    Text = if ($customName) { $customName } else { $env.displayName }
+                    HighlightPos = $env.highlightPos
+                    HighlightChar = $env.highlightChar
+                    Environment = $envKey
+                    Region = $env.region
+                    Role = $null
+                }
             }
             continue
         }
@@ -7898,12 +8810,22 @@ function Get-AwsAccountMenuItems {
     # Add special items at the end
     $accountItems += $specialItems
 
+    $iamMaxSessionLabel = Format-AwsSessionDurationLabel -Seconds (Get-IamMaxSessionDurationTargetSeconds)
+
     # Add sync option at the very end
     $accountItems += @{
         Text = "═══ Sync AWS Accounts from Okta ═══"
         HighlightPos = 0
         HighlightChar = "S"
         Environment = "sync"
+        Region = ""
+        Role = $null
+    }
+    $accountItems += @{
+        Text = "═══ Raise IAM role max session ($iamMaxSessionLabel) ═══"
+        HighlightPos = 0
+        HighlightChar = "R"
+        Environment = "iamMaxSessionDuration"
         Region = ""
         Role = $null
     }
@@ -7930,6 +8852,10 @@ function Show-AwsAccountMenu {
         if ($selectedAccount.Environment -eq "sync") {
             Sync-AwsAccountsFromOkta
             # Continue loop to return to AWS menu after sync
+            continue
+        }
+        elseif ($selectedAccount.Environment -eq "iamMaxSessionDuration") {
+            Invoke-UpdateIamRoleMaxSessionDurations
             continue
         }
         elseif ($selectedAccount.Environment -eq "manual") {
@@ -8133,6 +9059,7 @@ function Show-InstanceManagementMenu {
     # Define default menu
     $defaultMenu = @(
         (New-MenuAction "List Running Instances" { Get-RunningInstances }),
+        (New-MenuAction "Change AWS Region" { Invoke-ChangeAwsRegion }),
         (New-MenuAction "Set Default Instance ID" { Set-DefaultInstanceId }),
         (New-MenuAction "Set Default Remote Host Info" { Set-DefaultRemoteHostInfo }),
         (New-MenuAction "View Current Instance Settings" { Show-CurrentInstanceSettings }),

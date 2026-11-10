@@ -18,33 +18,29 @@
   },
   "aws": {
     "defaultRegion": "us-east-1",
+    "commonRegions": [
+      "us-east-1",
+      "us-west-2",
+      "eu-west-1"
+    ],
+    "includeManualAccountMenuItem": false,
+    "syncDiscoverTerraformDirectoryMappings": true,
+    "iamMaxSessionDurationSeconds": 43200,
     "fortiGateDeviceTypeId": "7125681a"
   },
   "environments": {
-    "manual": {
-      "displayName": "Manual Account Selection",
-      "region": "us-east-1",
-      "highlightChar": "M",
-      "highlightPos": 0,
-      "defaultRemoteIP": "",
-      "defaultRemotePort": "",
-      "defaultLocalPort": "",
-      "instances": {
-        "jump-box": ""
-      },
-      "boxes": [],
-      "actions": [
-        "instanceManagement",
-        "vpnConnections"
-      ]
-    },
     "exampleaccount": {
+      "isExample": true,
       "oktaProfileMap": {
         "Admin": "exampleaccount-OKTA-PROFILE-Admin",
         "devops": "exampleaccount-OKTA-PROFILE-devops"
       },
       "preferredRole": "Admin",
       "region": "us-east-1",
+      "regions": [
+        "us-east-1",
+        "us-west-2"
+      ],
       "instances": {
         "jump-box": "",
         "remote-host": ""
@@ -193,11 +189,13 @@
   },
   "awsAccountMenuOrder": [],
   "awsPromptIndicator": {
+    "autoInferTerraformPaths": true,
     "directoryMappings": {
       "C:\\path\\to\\project1": "123456789012",
       "C:\\path\\to\\project2": "987654321098"
     },
     "_comments": {
+      "autoInferTerraformPaths": "When true, paths under ..\\terraform\\<environment-key>\\ use that environment's accountId (no manual mapping required)",
       "directoryMappings": "Map directories to their expected AWS account IDs (12 digits)",
       "usage": "This module is loaded via PowerShell profile, not console.ps1",
       "credentialsFile": "The module reads from your AWS credentials file (default: %USERPROFILE%\\.aws\\credentials)",
@@ -320,5 +318,5 @@
     ],
     "wingetUnelevatedShell": "pwsh"
   },
-  "configVersion": "config.17"
+  "configVersion": "config.21"
 }
