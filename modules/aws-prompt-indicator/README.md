@@ -50,6 +50,7 @@ Edit `config.json` in the powershell-console root directory:
 ```json
 {
   "awsPromptIndicator": {
+    "autoInferTerraformPaths": true,
     "directoryMappings": {
       "C:\\path\\to\\project-alpha": "123456789012",
       "C:\\path\\to\\project-beta": "210987654321",
@@ -60,6 +61,14 @@ Edit `config.json` in the powershell-console root directory:
 ```
 
 ### 2. Directory Mappings
+
+**Terraform path inference (default on):** If the current path contains
+`\terraform\<environment-key>\` and `<environment-key>` exists in `config.json`
+`environments` (with an `accountId`), that account is treated as the expected
+account. New Okta-synced accounts such as `cscfaintlnetworkprod` work under paths
+like `C:\AppInstall\dev\intl-network-hub\terraform\cscfaintlnetworkprod\...` without
+adding manual `directoryMappings`. Set `autoInferTerraformPaths` to `false` to
+disable inference.
 
 Map your working directories to their expected AWS account IDs:
 

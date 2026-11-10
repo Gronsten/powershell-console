@@ -30,6 +30,8 @@ $script:Config = $null
 $script:CachedAccountId = $null
 $script:CredentialsFileLastModified = $null
 $script:CachedProfileKey = $null
+$script:CachedStsValidatedUntil = $null
+$script:AwsStsValidationCacheSeconds = 90
 
 <#
 .SYNOPSIS
@@ -41,6 +43,108 @@ $script:CachedProfileKey = $null
 .EXAMPLE
     Initialize-AwsPromptIndicator -ConfigPath "/root/AppInstall/dev/powershell-console/config.json"
 #>
+function Set-AwsPromptIndicatorConfigDerivedState {
+    $script:DirectoryMappings = @{}
+    if ($script:Config.awsPromptIndicator -and $script:Config.awsPromptIndicator.directoryMappings) {
+        $script:Config.awsPromptIndicator.directoryMappings.PSObject.Properties | ForEach-Object {
+            $script:DirectoryMappings[$_.Name] = $_.Value
+        }
+        Write-Verbose "Loaded $($script:DirectoryMappings.Count) directory mappings"
+    }
+
+    $script:ProfileToAccountMap = @{}
+    if ($script:Config.environments) {
+        $script:Config.environments.PSObject.Properties | ForEach-Object {
+            $envName = $_.Name
+            $envConfig = $_.Value
+
+            if ($envName -eq "manual") {
+                return
+            }
+
+            if ($envConfig.accountId) {
+                $script:ProfileToAccountMap[$envName] = $envConfig.accountId
+                $script:ProfileToAccountMap[$envName.Replace("-", "")] = $envConfig.accountId
+
+                if ($envName -match "^([a-z]+)([a-z]+)(.*)$") {
+                    $prefix = $Matches[1]
+                    $middle = $Matches[2]
+                    $suffix = $Matches[3]
+                    $altName = "$prefix-$middle$suffix"
+                    $script:ProfileToAccountMap[$altName] = $envConfig.accountId
+                }
+
+                if ($envConfig.PSObject.Properties['oktaProfileMap'] -and $envConfig.oktaProfileMap) {
+                    $envConfig.oktaProfileMap.PSObject.Properties | ForEach-Object {
+                        if ($_.Value) {
+                            $script:ProfileToAccountMap[$_.Value] = $envConfig.accountId
+                        }
+                    }
+                }
+            }
+        }
+        Write-Verbose "Loaded $($script:ProfileToAccountMap.Count) profile-to-account mappings"
+    }
+}
+
+function Test-AwsPromptIndicatorTerraformInferenceEnabled {
+    if (-not $script:Config.awsPromptIndicator) {
+        return $true
+    }
+
+    if ($script:Config.awsPromptIndicator.PSObject.Properties['autoInferTerraformPaths']) {
+        return [bool]$script:Config.awsPromptIndicator.autoInferTerraformPaths
+    }
+
+    return $true
+}
+
+function Get-ExpectedAwsAccountIdFromTerraformPath {
+    param([string]$NormalizedPath)
+
+    if (-not (Test-AwsPromptIndicatorTerraformInferenceEnabled)) {
+        return $null
+    }
+
+    if (-not $script:Config -or -not $script:Config.environments) {
+        return $null
+    }
+
+    $envEntries = @(
+        $script:Config.environments.PSObject.Properties |
+            Where-Object { $_.Name -ne "manual" -and $_.Value.accountId } |
+            Sort-Object { $_.Name.Length } -Descending
+    )
+
+    foreach ($envProp in $envEntries) {
+        $envKey = $envProp.Name
+        $marker = "\terraform\$envKey"
+        $pattern = '(?i)' + [regex]::Escape($marker) + '(\\|$)'
+        if ($NormalizedPath -match $pattern) {
+            Write-Verbose "Terraform path inference matched environment '$envKey'"
+            return $envProp.Value.accountId
+        }
+    }
+
+    return $null
+}
+
+function Update-AwsPromptIndicatorConfigFromFile {
+    if (-not $script:ConfigPath -or -not (Test-Path $script:ConfigPath)) {
+        return $false
+    }
+
+    try {
+        $script:Config = Get-Content $script:ConfigPath -Raw | ConvertFrom-Json
+        Set-AwsPromptIndicatorConfigDerivedState
+        return $true
+    }
+    catch {
+        Write-Verbose "Failed to reload config: $_"
+        return $false
+    }
+}
+
 function Initialize-AwsPromptIndicator {
     [CmdletBinding()]
     param(
@@ -55,53 +159,8 @@ function Initialize-AwsPromptIndicator {
 
     try {
         $script:ConfigPath = $ConfigPath
-        $script:Config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
-
-        # Load directory mappings if they exist
-        if ($script:Config.awsPromptIndicator -and $script:Config.awsPromptIndicator.directoryMappings) {
-            $script:DirectoryMappings = @{}
-            $script:Config.awsPromptIndicator.directoryMappings.PSObject.Properties | ForEach-Object {
-                $script:DirectoryMappings[$_.Name] = $_.Value
-            }
-            Write-Verbose "Loaded $($script:DirectoryMappings.Count) directory mappings"
-        }
-
-        # Build profile name to account ID mapping from environments
-        $script:ProfileToAccountMap = @{}
-        if ($script:Config.environments) {
-            $script:Config.environments.PSObject.Properties | ForEach-Object {
-                $envName = $_.Name
-                $envConfig = $_.Value
-
-                if ($envConfig.accountId) {
-                    # Map various profile name formats that okta-aws-cli might use
-                    # Examples: "myproject-prod", "myprojectprod", "my-project-prod"
-                    $script:ProfileToAccountMap[$envName] = $envConfig.accountId
-                    $script:ProfileToAccountMap[$envName.Replace("-","")] = $envConfig.accountId
-
-                    # Also try with dashes in different positions for compound names
-                    if ($envName -match "^([a-z]+)([a-z]+)(.*)$") {
-                        $prefix = $Matches[1]
-                        $middle = $Matches[2]
-                        $suffix = $Matches[3]
-                        $altName = "$prefix-$middle$suffix"
-                        $script:ProfileToAccountMap[$altName] = $envConfig.accountId
-                    }
-
-                    # Map role-specific okta-aws-cli profile names
-                    # Example: "etsnettoolsprod-CFA-OKTA-PROD-Admin"
-                    if ($envConfig.PSObject.Properties['oktaProfileMap'] -and $envConfig.oktaProfileMap) {
-                        $envConfig.oktaProfileMap.PSObject.Properties | ForEach-Object {
-                            if ($_.Value) {
-                                $script:ProfileToAccountMap[$_.Value] = $envConfig.accountId
-                            }
-                        }
-                    }
-                }
-            }
-            Write-Verbose "Loaded $($script:ProfileToAccountMap.Count) profile-to-account mappings"
-        }
-
+        $env:AWS_PROMPT_CONFIG_PATH = $ConfigPath
+        $null = Update-AwsPromptIndicatorConfigFromFile
         return $true
     }
     catch {
@@ -114,6 +173,196 @@ function Initialize-AwsPromptIndicator {
 .SYNOPSIS
     Returns $true when a credentials-file profile has a past x_security_token_expires value.
 #>
+function Reset-AwsPromptIndicatorCache {
+    $script:CachedAccountId = $null
+    $script:CredentialsFileLastModified = $null
+    $script:CachedProfileKey = $null
+    $script:CachedStsValidatedUntil = $null
+}
+
+function Test-AwsCredentialsProfileHasKeys {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CredentialsText,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ProfileName
+    )
+
+    $pattern = "(?ms)^\[$([regex]::Escape($ProfileName))\](.*?)(?=^\[|\z)"
+    $section = [regex]::Match($CredentialsText, $pattern)
+    if (-not $section.Success) {
+        return $false
+    }
+
+    $body = $section.Groups[1].Value
+    foreach ($key in @('aws_access_key_id', 'aws_secret_access_key', 'aws_session_token')) {
+        if ($body -notmatch "(?im)^\s*$([regex]::Escape($key))\s*=\s*(\S+)\s*$") {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Get-AwsCliNativeExecutablePath {
+    $commands = @(Get-Command aws.exe -All -ErrorAction SilentlyContinue | Where-Object {
+            $_.CommandType -eq 'Application' -and $_.Path -notmatch '\\shims\\'
+        })
+
+    if ($commands.Count -gt 0) {
+        return $commands[0].Path
+    }
+
+    $shim = Get-Command aws.exe -ErrorAction SilentlyContinue
+    if ($shim) {
+        return $shim.Path
+    }
+
+    return $null
+}
+
+function Test-AwsStsCallerIdentityForProfile {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProfileName
+    )
+
+    $awsExe = Get-AwsCliNativeExecutablePath
+    if (-not $awsExe) {
+        return $null
+    }
+
+    $stsArgs = @('sts', 'get-caller-identity', '--output', 'json')
+    if ($ProfileName -ne 'default') {
+        $stsArgs += @('--profile', $ProfileName)
+    }
+
+    try {
+        $identityJson = & $awsExe @stsArgs 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $identityJson) {
+            return $null
+        }
+
+        $identity = $identityJson | ConvertFrom-Json
+        if ($identity.Account -match '^\d{12}$') {
+            return $identity.Account
+        }
+    }
+    catch {
+        Write-Verbose "STS validation failed for profile '$ProfileName': $_"
+    }
+
+    return $null
+}
+
+function Clear-AwsPromptSessionState {
+    [CmdletBinding()]
+    param(
+        [switch]$RefreshPrompt
+    )
+
+    Reset-AwsPromptIndicatorCache
+
+    if (Test-Path -LiteralPath Env:AWS_PROFILE) {
+        Remove-Item Env:AWS_PROFILE
+    }
+
+    $env:AWS_DISPLAY_NAME = $env:USERNAME
+    $env:AWS_ACCOUNT_MISMATCH = 'false'
+    $env:AWS_ACCOUNT_MATCH = 'false'
+
+    if ($RefreshPrompt -and $global:AwsPromptIndicatorUpdateFunction) {
+        & $global:AwsPromptIndicatorUpdateFunction
+    }
+}
+
+function Import-AwsCredentialProfileHelpers {
+    $helperPath = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'scripts\AwsCredentialProfile.ps1'
+    if (Test-Path $helperPath) {
+        . $helperPath
+        return $true
+    }
+
+    return $false
+}
+
+function Invoke-AwsConsoleLogout {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string[]]$AwsArgumentList
+    )
+
+    $argumentList = @($AwsArgumentList)
+    $explicitProfile = $null
+    for ($i = 0; $i -lt $argumentList.Count; $i++) {
+        if ($argumentList[$i] -eq '--profile' -and ($i + 1) -lt $argumentList.Count) {
+            $explicitProfile = $argumentList[$i + 1]
+            break
+        }
+    }
+
+    $profilesToClear = @()
+    if ($explicitProfile) {
+        $profilesToClear += $explicitProfile
+    }
+
+    $credentialHelpersLoaded = Import-AwsCredentialProfileHelpers
+    if ($credentialHelpersLoaded -and (Get-Command Invoke-AwsCredentialLogout -ErrorAction SilentlyContinue)) {
+        $logoutResult = Invoke-AwsCredentialLogout -ProfileNames $profilesToClear
+        if ($logoutResult.ClearedFile) {
+            Write-Host "Cleared AWS credentials for: $($logoutResult.ProfileNames -join ', ')" -ForegroundColor Green
+        }
+        else {
+            Write-Host "No credential keys were cleared (profiles may already be empty)." -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "Credential helper script not found; cleared prompt state only." -ForegroundColor Yellow
+    }
+
+    Clear-AwsPromptSessionState -RefreshPrompt
+    Write-Host "Prompt AWS session indicator reset to default." -ForegroundColor Green
+}
+
+function Register-AwsCliLogoutWrapper {
+    if (Get-Command aws -CommandType Function -ErrorAction SilentlyContinue) {
+        Write-Verbose "An aws function is already defined; skipping logout wrapper registration"
+        return
+    }
+
+    $nativeAws = Get-AwsCliNativeExecutablePath
+    if (-not $nativeAws) {
+        Write-Verbose "aws.exe not found; skipping logout wrapper registration"
+        return
+    }
+
+    $logoutWrapper = {
+        param(
+            [Parameter(ValueFromRemainingArguments = $true)]
+            [object[]]$ArgumentList
+        )
+
+        $argsArray = @($ArgumentList)
+        $nativeExe = Get-AwsCliNativeExecutablePath
+        & $nativeExe @argsArray
+        $exitCode = $LASTEXITCODE
+
+        if ($argsArray.Count -ge 1 -and [string]$argsArray[0] -eq 'logout') {
+            Invoke-AwsConsoleLogout -AwsArgumentList $argsArray | Out-Null
+        }
+
+        $global:LASTEXITCODE = $exitCode
+    }.GetNewClosure()
+
+    Set-Item -Path function:global:aws -Value $logoutWrapper
+}
+
 function Test-AwsCredentialsProfileExpired {
     [CmdletBinding()]
     [OutputType([bool])]
@@ -185,9 +434,12 @@ function Get-CurrentAwsAccountId {
         $currentLastModified = $fileInfo.LastWriteTime
         $profileKey = [string]$env:AWS_PROFILE
 
-        # Use cached value if file and AWS_PROFILE haven't changed (cache both valid and null results)
-        if ($script:CredentialsFileLastModified -eq $currentLastModified -and $script:CachedProfileKey -eq $profileKey) {
-            Write-Verbose "Using cached account ID: $script:CachedAccountId (file unchanged)"
+        # Use cached value when file, profile, and recent STS validation are unchanged
+        if ($script:CredentialsFileLastModified -eq $currentLastModified -and
+            $script:CachedProfileKey -eq $profileKey -and
+            $script:CachedStsValidatedUntil -and
+            $script:CachedStsValidatedUntil -gt [datetime]::UtcNow) {
+            Write-Verbose "Using cached account ID: $script:CachedAccountId"
             return $script:CachedAccountId
         }
 
@@ -216,12 +468,12 @@ function Get-CurrentAwsAccountId {
         }
         elseif ($profiles -contains "default") {
             $defaultExpired = Test-AwsCredentialsProfileExpired -CredentialsText $credContent -ProfileName "default"
-            if ($defaultExpired) {
-                Write-Verbose "[default] profile is expired; not treating it as the active session"
-            }
-            else {
+            if (-not $defaultExpired) {
                 Write-Verbose "Using [default] profile"
                 $activeProfile = "default"
+            }
+            else {
+                Write-Verbose "[default] profile is expired; not treating it as the active session"
             }
         }
 
@@ -230,50 +482,39 @@ function Get-CurrentAwsAccountId {
             $script:CachedAccountId = $null
             $script:CredentialsFileLastModified = $currentLastModified
             $script:CachedProfileKey = $profileKey
+            $script:CachedStsValidatedUntil = $null
             return $null
         }
 
         Write-Verbose "Active profile from credentials file: $activeProfile"
 
-        # Try to map profile name to account ID
-        $accountId = $script:ProfileToAccountMap[$activeProfile]
-
-        # If profile name doesn't map, try AWS CLI as fallback (e.g., for [default] profile)
-        if (-not $accountId) {
-            Write-Verbose "Profile '$activeProfile' has no mapping, using AWS CLI fallback"
-            try {
-                $stsArgs = @("sts", "get-caller-identity")
-                if ($activeProfile -ne "default") {
-                    $stsArgs += @("--profile", $activeProfile)
-                }
-                $identityJson = & aws @stsArgs 2>$null
-                if ($LASTEXITCODE -eq 0 -and $identityJson) {
-                    $identity = $identityJson | ConvertFrom-Json
-                    $accountId = $identity.Account
-                    if ($accountId -match '^\d{12}$') {
-                        Write-Verbose "Retrieved account from AWS CLI: $accountId"
-                    }
-                }
-            }
-            catch {
-                Write-Verbose "AWS CLI fallback failed: $_"
-            }
-        }
-
-        if ($accountId) {
-            Write-Verbose "Final account ID: $accountId"
-            $script:CachedAccountId = $accountId
-            $script:CredentialsFileLastModified = $currentLastModified
-            $script:CachedProfileKey = $profileKey
-            return $accountId
-        }
-        else {
-            Write-Verbose "No account ID determined for profile: $activeProfile"
+        $profileExpired = Test-AwsCredentialsProfileExpired -CredentialsText $credContent -ProfileName $activeProfile
+        $hasKeys = Test-AwsCredentialsProfileHasKeys -CredentialsText $credContent -ProfileName $activeProfile
+        if ($profileExpired -or -not $hasKeys) {
+            Write-Verbose "Profile '$activeProfile' is expired or has no active credentials"
             $script:CachedAccountId = $null
             $script:CredentialsFileLastModified = $currentLastModified
             $script:CachedProfileKey = $profileKey
+            $script:CachedStsValidatedUntil = $null
             return $null
         }
+
+        $accountId = Test-AwsStsCallerIdentityForProfile -ProfileName $activeProfile
+        if ($accountId) {
+            Write-Verbose "Validated account ID via STS: $accountId"
+            $script:CachedAccountId = $accountId
+            $script:CredentialsFileLastModified = $currentLastModified
+            $script:CachedProfileKey = $profileKey
+            $script:CachedStsValidatedUntil = [datetime]::UtcNow.AddSeconds($script:AwsStsValidationCacheSeconds)
+            return $accountId
+        }
+
+        Write-Verbose "No valid STS session for profile '$activeProfile'"
+        $script:CachedAccountId = $null
+        $script:CredentialsFileLastModified = $currentLastModified
+        $script:CachedProfileKey = $profileKey
+        $script:CachedStsValidatedUntil = [datetime]::UtcNow.AddSeconds(15)
+        return $null
     }
     catch {
         Write-Verbose "Error reading AWS credentials: $_"
@@ -300,7 +541,7 @@ function Get-ExpectedAwsAccountId {
     [OutputType([string])]
     param()
 
-    $currentPath = Get-Location | Select-Object -ExpandProperty Path
+    $currentPath = (Get-Location | Select-Object -ExpandProperty Path).Replace('/', '\')
 
     # Check exact match first
     if ($script:DirectoryMappings.ContainsKey($currentPath)) {
@@ -314,6 +555,12 @@ function Get-ExpectedAwsAccountId {
             Write-Verbose "Parent directory mapping found: $mappedDir"
             return $script:DirectoryMappings[$mappedDir]
         }
+    }
+
+    $inferredAccount = Get-ExpectedAwsAccountIdFromTerraformPath -NormalizedPath $currentPath
+    if ($inferredAccount) {
+        Write-Verbose "Inferred expected account from terraform path: $inferredAccount"
+        return $inferredAccount
     }
 
     Write-Verbose "No directory mapping found for: $currentPath"
@@ -489,6 +736,8 @@ function Enable-AwsPromptIndicator {
         if ($initResult) {
             # Create the update function in global scope
             $global:AwsPromptIndicatorUpdateFunction = {
+                $null = Update-AwsPromptIndicatorConfigFromFile
+
                 $status = Test-AwsAccountMismatch
                 $currentAccountId = Get-CurrentAwsAccountId
                 $expectedAccountId = Get-ExpectedAwsAccountId
@@ -515,7 +764,10 @@ function Enable-AwsPromptIndicator {
 
                 # Set display name for session segment (falls back to username if not logged into AWS)
                 if ($currentAccountId) {
-                    $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+                    $config = $script:Config
+                    if (-not $config) {
+                        $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+                    }
 
                     # Find friendly name from config environments
                     $friendlyName = $null
@@ -534,6 +786,8 @@ function Enable-AwsPromptIndicator {
 
             # Run initial update
             & $global:AwsPromptIndicatorUpdateFunction
+
+            Register-AwsCliLogoutWrapper
 
             # Initialize oh-my-posh if theme provided
             if ($OhMyPoshTheme -and (Test-Path $OhMyPoshTheme)) {
@@ -570,5 +824,8 @@ Export-ModuleMember -Function @(
     'Test-AwsAccountMismatch',
     'Get-AwsPromptSegmentData',
     'Get-AwsPromptIndicator',
-    'Enable-AwsPromptIndicator'
+    'Enable-AwsPromptIndicator',
+    'Clear-AwsPromptSessionState',
+    'Invoke-AwsConsoleLogout',
+    'Reset-AwsPromptIndicatorCache'
 )

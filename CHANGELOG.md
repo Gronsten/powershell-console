@@ -20,6 +20,112 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.18 (2026-11-11)
+
+**Bug Fixes:**
+- **AWS prompt indicator** — No longer treats a profile name mapping as an active
+  session. Credentials must be present, unexpired, and pass `sts get-caller-identity`
+  before the prompt shows an account name (fixes stale `cfawebukprod` after failed or
+  revoked access).
+- **`aws logout`** — When the AWS prompt module is enabled, `aws logout` also clears
+  local credential keys and resets `AWS_DISPLAY_NAME` / match flags even if the CLI
+  reports “no login session found” for the okta-aws-cli profile.
+- **`scripts/aws-logout.ps1`** — Clears `[default]` plus the active profile and resets
+  prompt state.
+
+### v1.22.17 (2026-11-11)
+
+**New Features:**
+- **Okta sync pruning** — Step 5.5 lists `config.json` environments whose
+  `accountId` was not returned by the Okta profile sync (for example revoked
+  access to `753807627141`). On confirmation, removes the environment, menu order
+  entries, prompt directory mappings, and matching `okta.yaml` idp/role/profile data.
+- Sync also **drops roles** from an environment when Okta no longer returns them.
+
+### v1.22.16 (2026-11-11)
+
+**Bug Fixes:**
+- **AWS login falsely reported success when okta-aws-cli failed** — Honor
+  `$LASTEXITCODE` and verify `sts get-caller-identity` for named profiles after login.
+
+### v1.22.15 (2026-11-11)
+
+**Bug Fixes:**
+- **Raise IAM role max session** — Returning `@($List)` wrapped the
+  `List[object]` as a single candidate so properties became arrays. Return
+  `$results.ToArray()` instead.
+
+### v1.22.14 (2026-11-11)
+
+**Bug Fixes:**
+- **Raise IAM role max session** — YAML profile parsing used `(?s)` so one profile block
+  absorbed the entire `profiles:` section; preview showed bogus rows. Parser is now
+  line-based and lists each profile with `aws-session-duration` below the target.
+
+### v1.22.13 (2026-11-11)
+
+**Changed:**
+- **Raise IAM role max session (12h)** — Reads `aws-session-duration` from
+  `okta.yaml` (values from Sync step 3.5) instead of calling `get-role` again.
+  Updates IAM with `aws iam update-role`, then bumps matching YAML entries to
+  the target duration.
+
+### v1.22.12 (2026-11-11)
+
+**New Features:**
+- **Raise IAM role max session (12h)** — AWS account menu option runs
+  `aws iam update-role --max-session-duration` for roles below
+  `aws.iamMaxSessionDurationSeconds` (default `43200`).
+
+**Removed (v1.22.11 rollback):**
+- Config/`okta.yaml` session-duration upgrade path and related sync behavior.
+
+**Config Changes:**
+- Added `aws.iamMaxSessionDurationSeconds` (default `43200` for the IAM update tool).
+- `configVersion` → `config.21`.
+
+### v1.22.10 (2026-11-10)
+
+**New Features:**
+- **Okta sync: terraform directory discovery** — After account sync, scans
+  `paths.devRoot` for `terraform\<environment-key>` folders and adds
+  `awsPromptIndicator.directoryMappings` entries for the prompt indicator
+  (`aws.syncDiscoverTerraformDirectoryMappings`, default on).
+
+**AWS Account Menu:**
+- Hides placeholder `exampleaccount` / `isExample` / `123456789012` entries and
+  **Manual Account Selection** by default (`aws.includeManualAccountMenuItem`: false).
+
+**Config Changes:**
+- Added `aws.includeManualAccountMenuItem` (boolean, default false in behavior).
+- Added `aws.syncDiscoverTerraformDirectoryMappings` (boolean, default true).
+- `exampleaccount` in `config.example.json` marked `"isExample": true` (schema only).
+- `configVersion` → `config.19`.
+
+### v1.22.9 (2026-11-10)
+
+**Bug Fixes:**
+- **AWS Prompt Indicator: no green check for new synced accounts** — Accounts added via
+  Okta sync (for example `cscfaintlnetworkprod`) did not get a match indicator when working
+  under `...\terraform\<environment>\` because only explicit `directoryMappings` were used
+  and profile mappings were frozen at profile startup. The module now reloads config on each
+  prompt refresh and infers the expected account ID from terraform path segments that match
+  `environments` keys (`autoInferTerraformPaths`, default on).
+
+### v1.22.8 (2026-11-10)
+
+**New Features:**
+- **AWS region selection** — Pick a region before login when an environment defines
+  `regions` (multiple entries). Manual login uses `aws.commonRegions` plus
+  `aws.defaultRegion` instead of an unknown region placeholder.
+- **Change AWS Region** — Instance Management menu item updates the session
+  (`AWS_DEFAULT_REGION`) and optionally saves the default `region` in `config.json`.
+
+**Config Changes:**
+- Added `aws.commonRegions` (string array) for manual login and custom region picks.
+- Added optional `environments.<name>.regions` (string array) for per-account region lists.
+- `configVersion` → `config.18`.
+
 ### v1.22.7 (2026-11-09)
 
 **Bug Fixes:**

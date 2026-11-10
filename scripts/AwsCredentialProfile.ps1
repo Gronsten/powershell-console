@@ -234,3 +234,131 @@ function Sync-AwsDefaultProfileFrom {
     Write-Host "Synced [$SourceProfile] credentials to [default] for AWS CLI / OpenTofu" -ForegroundColor Gray
     return $true
 }
+
+<#
+.SYNOPSIS
+    Serializes a profile map back into INI text for ~/.aws/credentials.
+#>
+function ConvertTo-AwsIniText {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Profiles
+    )
+
+    $usesLf = $true
+    $nl = "`n"
+    $lines = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($profileName in ($Profiles.Keys | Sort-Object)) {
+        [void]$lines.Add("[$profileName]")
+        foreach ($key in ($Profiles[$profileName].Keys | Sort-Object)) {
+            [void]$lines.Add("$key = $($Profiles[$profileName][$key])")
+        }
+        [void]$lines.Add('')
+    }
+
+    return (($lines -join $nl).TrimEnd() + $nl)
+}
+
+<#
+.SYNOPSIS
+    Removes active credential keys from one or more profiles in a credentials file.
+#>
+function Clear-AwsCredentialProfiles {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$CredentialsPath = $(Join-Path $env:USERPROFILE ".aws\credentials"),
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$ProfileNames
+    )
+
+    if (-not (Test-Path $CredentialsPath)) {
+        return $false
+    }
+
+    $uniqueNames = @($ProfileNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    if ($uniqueNames.Count -eq 0) {
+        return $false
+    }
+
+    $original = Get-Content -Path $CredentialsPath -Raw
+    $profiles = Get-AwsIniProfileMap -IniText $original
+    $credentialKeys = @(
+        'aws_access_key_id',
+        'aws_secret_access_key',
+        'aws_session_token',
+        'x_security_token_expires',
+        'x_principal_arn'
+    )
+
+    $changed = $false
+    foreach ($profileName in $uniqueNames) {
+        if (-not $profiles.ContainsKey($profileName)) {
+            continue
+        }
+
+        foreach ($key in $credentialKeys) {
+            if ($profiles[$profileName].ContainsKey($key)) {
+                $profiles[$profileName].Remove($key)
+                $changed = $true
+            }
+        }
+    }
+
+    if (-not $changed) {
+        return $false
+    }
+
+    $backupPath = "$CredentialsPath.backup"
+    Copy-Item -Path $CredentialsPath -Destination $backupPath -Force
+    $updated = ConvertTo-AwsIniText -Profiles $profiles
+    Set-Content -Path $CredentialsPath -Value $updated -NoNewline -Encoding utf8
+    return $true
+}
+
+<#
+.SYNOPSIS
+    Clears local AWS credential profiles and runs aws logout when the CLI is available.
+#>
+function Invoke-AwsCredentialLogout {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$CredentialsPath = $(Join-Path $env:USERPROFILE ".aws\credentials"),
+
+        [Parameter(Mandatory = $false)]
+        [string[]]$ProfileNames
+    )
+
+    $targets = @()
+    if ($ProfileNames) {
+        $targets += @($ProfileNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    if ($env:AWS_PROFILE -and ($targets -notcontains $env:AWS_PROFILE)) {
+        $targets += $env:AWS_PROFILE
+    }
+    if ($targets -notcontains 'default') {
+        $targets += 'default'
+    }
+
+    $targets = @($targets | Select-Object -Unique)
+    $cleared = $false
+    if (Test-Path $CredentialsPath) {
+        $cleared = Clear-AwsCredentialProfiles -CredentialsPath $CredentialsPath -ProfileNames $targets
+    }
+
+    foreach ($target in $targets) {
+        if (Get-Command aws -CommandType Application -ErrorAction SilentlyContinue) {
+            & aws logout --profile $target 2>&1 | Out-Null
+        }
+    }
+
+    return [PSCustomObject]@{
+        ClearedFile  = $cleared
+        ProfileNames = $targets
+    }
+}

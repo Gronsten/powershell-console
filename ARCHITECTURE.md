@@ -416,11 +416,12 @@ Get-SavedMenuPosition -MenuId "AWS-Account-Menu"
        │ Reads: $script:Config.environments
        │ Builds menu dynamically
        │
-3. User selects account + role
+3. User selects account + role; if `environments.<name>.regions` has multiple
+   entries, `Select-AwsRegion` runs before login (manual login uses `aws.commonRegions`)
    └─> Invoke-AwsAuthentication (line ~4300)
        │ Reads: $env.oktaProfileMap[$role]
        │ Executes: okta-aws-cli web --profile <profile> --session-duration <duration>
-       │ Sets: $global:currentAwsProfile, $global:currentAwsEnvironment
+       │ Sets: $env:AWS_DEFAULT_REGION, $global:currentAwsRegion, profile, environment
        │
 4. Redirect to Instance Management or selected action
    └─> Show-InstanceManagementMenu (line ~5200)
@@ -462,6 +463,10 @@ Set-DefaultRemoteHostInfo
 #           $script:Config.environments[$env].defaultRemotePort
 #           $script:Config.environments[$env].defaultLocalPort
 ```
+
+**Region changes (session)**: Instance Management → **Change AWS Region** updates
+`AWS_DEFAULT_REGION` and `$global:currentAwsRegion`; optionally persists
+`environments.<name>.region` in `config.json`.
 
 **Running Instance Display**: `Get-RunningInstances` (line ~5100)
 - Shows all running instances in current account/region

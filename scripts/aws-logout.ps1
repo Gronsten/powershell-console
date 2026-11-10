@@ -1,80 +1,66 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Clears AWS credentials from the [default] profile.
+    Clears local AWS/Okta session state and resets the AWS prompt indicator.
 
 .DESCRIPTION
-    This script safely clears the AWS credentials (access key, secret key, and session token)
-    from the [default] profile in ~/.aws/credentials without affecting other profiles.
+    okta-aws-cli writes credentials to named profiles (and the console syncs [default]).
+    The AWS CLI "aws logout" command only clears its own login-session cache, so running
+    it alone can warn that no session exists while stale keys remain and the prompt still
+    shows the old account.
 
-    This provides a "logout" function for okta-aws-cli, which writes credentials to [default]
-    but doesn't provide a built-in logout mechanism.
+    This script clears credential keys from [default] and the active AWS profile (when set),
+    runs aws logout for those profiles when available, and resets AWS_DISPLAY_NAME and
+    related prompt variables.
 
 .EXAMPLE
     .\aws-logout.ps1
-    Clears credentials from [default] profile
 
 .NOTES
     Part of powershell-console project
-    Works with okta-aws-cli authentication workflow
 #>
 
 [CmdletBinding()]
-param()
+param(
+    [Parameter(Mandatory = $false)]
+    [string[]]$Profile
+)
 
 $ErrorActionPreference = 'Stop'
 
-# AWS credentials file path
-$credentialsPath = "$env:USERPROFILE\.aws\credentials"
+$consoleRoot = Split-Path $PSScriptRoot -Parent
+$credentialScript = Join-Path $PSScriptRoot 'AwsCredentialProfile.ps1'
+$modulePath = Join-Path $consoleRoot 'modules\aws-prompt-indicator\AwsPromptIndicator.psm1'
 
-# Check if credentials file exists
-if (-not (Test-Path $credentialsPath)) {
-    Write-Host "No AWS credentials file found" -ForegroundColor Yellow
-    Write-Host "Nothing to log out from." -ForegroundColor Yellow
-    exit 0
+if (Test-Path $credentialScript) {
+    . $credentialScript
 }
 
-try {
-    # Read the entire credentials file
-    $content = Get-Content $credentialsPath -Raw
+$profileNames = @()
+if ($Profile) {
+    $profileNames += @($Profile | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
 
-    # Check if [default] profile exists
-    if ($content -notmatch '\[default\]') {
-        Write-Host "No [default] profile found in credentials file." -ForegroundColor Yellow
-        Write-Host "Nothing to log out from." -ForegroundColor Yellow
-        exit 0
+if (Get-Command Invoke-AwsCredentialLogout -ErrorAction SilentlyContinue) {
+    $null = Invoke-AwsCredentialLogout -ProfileNames $profileNames
+}
+else {
+    Write-Warning "AwsCredentialProfile.ps1 helpers were not loaded; credential file was not updated."
+}
+
+if (Test-Path $modulePath) {
+    Import-Module $modulePath -Force -DisableNameChecking | Out-Null
+    if (Get-Command Clear-AwsPromptSessionState -ErrorAction SilentlyContinue) {
+        Clear-AwsPromptSessionState -RefreshPrompt
     }
-
-    # Pattern to match the [default] section and its credentials
-    $pattern = '(?s)(\[default\])\s*(aws_access_key_id\s*=\s*)[^\r\n]*([\r\n]+)(aws_secret_access_key\s*=\s*)[^\r\n]*([\r\n]+)(aws_session_token\s*=\s*)[^\r\n]*'
-
-    # Replace with empty credentials
-    # $1=[default] $2=aws_access_key_id = $3=newline $4=aws_secret_access_key = $5=newline $6=aws_session_token =
-    $replacement = '$1$3$2$3$4$5$6'
-
-    $newContent = $content -replace $pattern, $replacement
-
-    # Backup the original file
-    $backupPath = "$credentialsPath.backup"
-    Copy-Item $credentialsPath $backupPath -Force
-    Write-Verbose "Created backup at: $backupPath"
-
-    # Write the updated content
-    $newContent | Set-Content $credentialsPath -NoNewline
-
-    Write-Host "Successfully logged out of AWS" -ForegroundColor Green
-    Write-Host "  Cleared credentials from [default] profile" -ForegroundColor Gray
-    Write-Host "  Backup saved to: $backupPath" -ForegroundColor Gray
 }
-catch {
-    Write-Error "Failed to clear AWS credentials: $_"
-
-    # Attempt to restore from backup if it exists
-    if (Test-Path "$credentialsPath.backup") {
-        Write-Warning "Attempting to restore from backup..."
-        Copy-Item "$credentialsPath.backup" $credentialsPath -Force
-        Write-Host "Restored original credentials file" -ForegroundColor Yellow
+else {
+    if (Test-Path -LiteralPath Env:AWS_PROFILE) {
+        Remove-Item Env:AWS_PROFILE
     }
-
-    exit 1
+    $env:AWS_DISPLAY_NAME = $env:USERNAME
+    $env:AWS_ACCOUNT_MISMATCH = 'false'
+    $env:AWS_ACCOUNT_MATCH = 'false'
 }
+
+Write-Host "AWS session cleared and prompt reset to default." -ForegroundColor Green
