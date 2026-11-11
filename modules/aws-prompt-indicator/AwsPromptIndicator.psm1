@@ -32,6 +32,7 @@ $script:CredentialsFileLastModified = $null
 $script:CachedProfileKey = $null
 $script:CachedStsValidatedUntil = $null
 $script:AwsStsValidationCacheSeconds = 90
+$script:ConsoleRoot = $null
 
 <#
 .SYNOPSIS
@@ -159,6 +160,7 @@ function Initialize-AwsPromptIndicator {
 
     try {
         $script:ConfigPath = $ConfigPath
+        $script:ConsoleRoot = Split-Path -Parent $ConfigPath
         $env:AWS_PROMPT_CONFIG_PATH = $ConfigPath
         $null = Update-AwsPromptIndicatorConfigFromFile
         return $true
@@ -281,14 +283,8 @@ function Clear-AwsPromptSessionState {
     }
 }
 
-function Import-AwsCredentialProfileHelpers {
-    $helperPath = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'scripts\AwsCredentialProfile.ps1'
-    if (Test-Path $helperPath) {
-        . $helperPath
-        return $true
-    }
-
-    return $false
+function Test-AwsCredentialProfileHelpersAvailable {
+    return [bool]$script:CredentialProfileHelpersLoaded
 }
 
 function Invoke-AwsConsoleLogout {
@@ -312,14 +308,18 @@ function Invoke-AwsConsoleLogout {
         $profilesToClear += $explicitProfile
     }
 
-    $credentialHelpersLoaded = Import-AwsCredentialProfileHelpers
-    if ($credentialHelpersLoaded -and (Get-Command Invoke-AwsCredentialLogout -ErrorAction SilentlyContinue)) {
-        $logoutResult = Invoke-AwsCredentialLogout -ProfileNames $profilesToClear
-        if ($logoutResult.ClearedFile) {
-            Write-Host "Cleared AWS credentials for: $($logoutResult.ProfileNames -join ', ')" -ForegroundColor Green
+    if (Test-AwsCredentialProfileHelpersAvailable) {
+        try {
+            $logoutResult = Invoke-AwsCredentialLogout -ProfileNames $profilesToClear -SkipCliLogout
+            if ($logoutResult.ClearedFile) {
+                Write-Host "Cleared AWS credentials for: $($logoutResult.ProfileNames -join ', ')" -ForegroundColor Green
+            }
+            else {
+                Write-Host "No credential keys were cleared (profiles may already be empty)." -ForegroundColor Yellow
+            }
         }
-        else {
-            Write-Host "No credential keys were cleared (profiles may already be empty)." -ForegroundColor Yellow
+        catch {
+            Write-Host "Could not clear credential file: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
     else {
@@ -331,16 +331,18 @@ function Invoke-AwsConsoleLogout {
 }
 
 function Register-AwsCliLogoutWrapper {
-    if (Get-Command aws -CommandType Function -ErrorAction SilentlyContinue) {
-        Write-Verbose "An aws function is already defined; skipping logout wrapper registration"
-        return
-    }
-
     $nativeAws = Get-AwsCliNativeExecutablePath
     if (-not $nativeAws) {
         Write-Verbose "aws.exe not found; skipping logout wrapper registration"
         return
     }
+
+    $moduleName = $MyInvocation.MyCommand.Module.Name
+    $logoutCleanupCmd = Get-Command -Name Invoke-AwsConsoleLogout -Module $moduleName -ErrorAction Stop
+
+    # Global handles survive in the global `aws` function (closures cannot call private module helpers).
+    $global:AwsPromptIndicatorNativeCliPath = $nativeAws
+    $global:AwsPromptIndicatorLogoutCommand = $logoutCleanupCmd
 
     $logoutWrapper = {
         param(
@@ -349,18 +351,25 @@ function Register-AwsCliLogoutWrapper {
         )
 
         $argsArray = @($ArgumentList)
-        $nativeExe = Get-AwsCliNativeExecutablePath
+        $nativeExe = $global:AwsPromptIndicatorNativeCliPath
+        if (-not $nativeExe) {
+            throw "aws.exe path missing. Re-run Enable-AwsPromptIndicator."
+        }
+
         & $nativeExe @argsArray
         $exitCode = $LASTEXITCODE
 
         if ($argsArray.Count -ge 1 -and [string]$argsArray[0] -eq 'logout') {
-            Invoke-AwsConsoleLogout -AwsArgumentList $argsArray | Out-Null
+            $cleanup = $global:AwsPromptIndicatorLogoutCommand
+            if ($cleanup) {
+                & $cleanup -AwsArgumentList $argsArray | Out-Null
+            }
         }
 
         $global:LASTEXITCODE = $exitCode
-    }.GetNewClosure()
+    }
 
-    Set-Item -Path function:global:aws -Value $logoutWrapper
+    Set-Item -Path function:global:aws -Value $logoutWrapper -Force
 }
 
 function Test-AwsCredentialsProfileExpired {
@@ -731,6 +740,7 @@ function Enable-AwsPromptIndicator {
 
     try {
         # Initialize the module
+        $script:ConsoleRoot = Split-Path -Parent $ConfigPath
         $initResult = Initialize-AwsPromptIndicator -ConfigPath $ConfigPath -ErrorAction Stop
 
         if ($initResult) {
@@ -814,6 +824,22 @@ function Enable-AwsPromptIndicator {
         $env:AWS_DISPLAY_NAME = $env:USERNAME
         return $false
     }
+}
+
+$script:CredentialProfileHelpersLoaded = $false
+$script:CredentialProfileHelperPath = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'scripts\AwsCredentialProfile.ps1'
+if (Test-Path $script:CredentialProfileHelperPath) {
+    try {
+        . $script:CredentialProfileHelperPath
+        $helperCmd = Get-Command -Name Invoke-AwsCredentialLogout -CommandType Function -ErrorAction SilentlyContinue
+        $script:CredentialProfileHelpersLoaded = $null -ne $helperCmd
+    }
+    catch {
+        Write-Warning "Failed to dot-source credential helpers from $($script:CredentialProfileHelperPath): $_"
+    }
+}
+else {
+    Write-Warning "Credential helper script not found at $($script:CredentialProfileHelperPath)"
 }
 
 # Export module functions

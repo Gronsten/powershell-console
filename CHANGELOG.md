@@ -20,6 +20,19 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.22.19 (2026-11-11)
+
+**Bug Fixes:**
+- **`aws logout` wrapper** — Global `aws` no longer calls module-private helpers.
+  Uses captured `aws.exe` path and `Invoke-AwsConsoleLogout` via `$global:` handles;
+  re-registers the wrapper on every `Enable-AwsPromptIndicator`.
+- **Credential helper path** — Resolves `scripts/AwsCredentialProfile.ps1` from
+  the `Enable-AwsPromptIndicator` config directory (PROD vs DEV).
+- **Logout credential clear** — Dot-sourced helpers at module load; call them
+  directly instead of `Get-Command` (fixes false “helper not found”).
+- **Logout recursion** — `Invoke-AwsCredentialLogout` calls `aws.exe` directly and
+  skips CLI logout when invoked from the `aws logout` wrapper (avoids infinite loop).
+
 ### v1.22.18 (2026-11-11)
 
 **Bug Fixes:**

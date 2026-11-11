@@ -320,6 +320,23 @@ function Clear-AwsCredentialProfiles {
     return $true
 }
 
+function Get-AwsCliNativeExecutable {
+    $commands = @(Get-Command aws.exe -All -ErrorAction SilentlyContinue | Where-Object {
+            $_.CommandType -eq 'Application' -and $_.Path -notmatch '\\shims\\'
+        })
+
+    if ($commands.Count -gt 0) {
+        return $commands[0].Path
+    }
+
+    $shim = Get-Command aws.exe -ErrorAction SilentlyContinue
+    if ($shim) {
+        return $shim.Path
+    }
+
+    return $null
+}
+
 <#
 .SYNOPSIS
     Clears local AWS credential profiles and runs aws logout when the CLI is available.
@@ -331,7 +348,10 @@ function Invoke-AwsCredentialLogout {
         [string]$CredentialsPath = $(Join-Path $env:USERPROFILE ".aws\credentials"),
 
         [Parameter(Mandatory = $false)]
-        [string[]]$ProfileNames
+        [string[]]$ProfileNames,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$SkipCliLogout
     )
 
     $targets = @()
@@ -351,9 +371,12 @@ function Invoke-AwsCredentialLogout {
         $cleared = Clear-AwsCredentialProfiles -CredentialsPath $CredentialsPath -ProfileNames $targets
     }
 
-    foreach ($target in $targets) {
-        if (Get-Command aws -CommandType Application -ErrorAction SilentlyContinue) {
-            & aws logout --profile $target 2>&1 | Out-Null
+    if (-not $SkipCliLogout) {
+        $awsExe = Get-AwsCliNativeExecutable
+        foreach ($target in $targets) {
+            if ($awsExe) {
+                & $awsExe logout --profile $target 2>&1 | Out-Null
+            }
         }
     }
 
