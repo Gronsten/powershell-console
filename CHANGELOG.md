@@ -20,6 +20,56 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.23.0 (2026-11-12)
+
+**Config Changes Required** (`config.21` to `config.22`):
+- Set `paths.backupDestination` to an absolute path (for example a cloud-drive
+  folder). Paths relative to the user profile still work.
+- Replaced the `backupDev` section: removed `exclusions`, `mirrorMode` and the
+  related comments; added `includesFile`, `weeklyZip`, `excludeDirectories` and
+  `excludeFiles` (see `config.example.json`).
+- `paths.backupSource` is no longer used by backup-dev (it can be left in place).
+- Create `modules/backup-dev/backup-includes.txt` from
+  `backup-includes.example.txt`. The file is gitignored.
+
+**New Features:**
+- **Allowlist backup** — `backup-dev` now mirrors only the paths listed in
+  `backup-includes.txt` (non-repo folders, gitignored config and secrets, repos
+  with no remote, machine config) to `<destination>\files\`, instead of copying
+  the whole dev folder. Tokens `%DEV%` and `%HOME%` and `!` excludes are supported.
+- **Package manifests** — Each backup writes scoop, winget, npm global, pip,
+  VS Code extension, PowerShell module and .NET SDK lists, plus a Git repo list
+  (`repos.json`), to `<destination>\manifests\`. New menu item
+  "Refresh Package Manifests Only" (`--manifests-only`).
+- **Weekly zip** — A dated `dev-YYYY-MM-DD.zip` of the mirror and manifests is
+  created in `<destination>\weekly\` when the newest is older than
+  `intervalDays` (default 7); the newest `keep` (default 8) are retained. This
+  allows recovering items deleted from the mirror.
+- **Unpushed work capture** — For repos that have a remote, uncommitted changes
+  (`uncommitted.patch` plus small untracked files) and unpushed commits (`unpushed.bundle`)
+  are saved to `<destination>\wip\`, and included in the weekly zip. Remotes matching
+  `backupDev.wip.excludeRemotePatterns` (for example an employer org) are skipped.
+- **Restore preview** — New menu item "Restore Preview (WhatIf)" runs `restore-dev.ps1 -WhatIf`.
+- **Restore playbook** — `restore-dev.md` and `restore-dev.ps1` rebuild an
+  environment from a backup: repo clones, restored files, then packages, with
+  `-WhatIf` support. Restored files never overwrite existing ones (fresh clones stay
+  as on the remote); `-OverwriteExisting` lets the backup win. A copy is stored in `<destination>\restore\` because the repo
+  is not available on a rebuilt machine.
+
+**Safety:**
+- Refuses to run if the destination's parent folder is missing (unmounted drive).
+- A list-only pass runs first; an item whose source is empty while its mirror is
+  not is skipped rather than purged.
+
+**Removed:**
+- Test Mode, Scan Deprecated Files and Manage Exclusions menu items, and the
+  supporting `backup-exclusions.ps1`, `scan-excluded.py` and `delete-excluded.py`
+  (superseded by the allowlist).
+
+**Bug Fixes:**
+- Backup menu "Dry Run" called `Start-BackupDryRun`, which was not defined; it now
+  exists.
+
 ### v1.22.19 (2026-11-11)
 
 **Bug Fixes:**

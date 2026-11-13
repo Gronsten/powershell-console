@@ -1,0 +1,41 @@
+# backup-includes.txt - allowlist for backup-dev.ps1
+#
+# Copy this file to backup-includes.txt (which is gitignored) and edit it.
+# Keep the real list local: it names your own folders.
+#
+# Syntax (one entry per line):
+#   %DEV%\path     A file or folder under paths.devRoot (from config.json)
+#   %HOME%\path    A file or folder under your user profile
+#   !<full path>   Exclude a sub-path from an include above (tokens allowed)
+#   # text         Comment
+#
+# Folders are mirrored (robocopy /MIR): deletions in the source are propagated
+# to the backup, so rely on the weekly zips to recover deleted items.
+# Single files are copied without touching their siblings.
+#
+# Default excludes (node_modules, .terraform, .venv, VHDs, ...) apply
+# everywhere; see backupDev.excludeDirectories / excludeFiles in config.json.
+#
+# Back up only what Git does not already protect:
+#   1. Folders that are not Git repositories
+#   2. Git-ignored local files (config, secrets, local state)
+#   3. Repositories that have no remote yet (include the .git folder too)
+
+# --- Folders that are not Git repos ---
+%DEV%\one-off-scripts
+%DEV%\notes
+
+# --- Git-ignored local files inside repos that DO have a remote ---
+%DEV%\my-project\config.json
+%DEV%\my-project\local-state
+
+# --- A repo with no remote yet (whole folder, including .git) ---
+%DEV%\unpublished-repo
+!%DEV%\unpublished-repo\generated-output
+
+# --- Workspace documents ---
+%DEV%\README.md
+
+# --- Machine configuration under the user profile ---
+%HOME%\.ssh
+%HOME%\.gitconfig

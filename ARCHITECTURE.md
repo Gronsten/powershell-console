@@ -1172,9 +1172,17 @@ function Get-MyAwsResource {
 
 **backup-dev module**:
 - **Location**: [modules/backup-dev/backup-dev.ps1](modules/backup-dev/backup-dev.ps1:1)
-- **Invocation**: `Start-BackupDevEnvironment` in console.ps1
-- **Execution**: `.\modules\backup-dev\backup-dev.ps1 [args]`
+- **Invocation**: `Start-BackupDevEnvironment` in console.ps1 (menu "Backup Dev Environment")
+- **Execution**: `.\modules\backup-dev\backup-dev.ps1 [--dry-run|--count|--manifests-only|--zip|--no-zip]`
 - **Standalone**: Can be run directly outside console.ps1
+- **Design (v1.23.0)**: allowlist backup, not a whole-folder copy. Mirrors the paths in
+  the gitignored `backup-includes.txt` (template: `backup-includes.example.txt`) to
+  `<paths.backupDestination>\files\{dev,home}`, writes package manifests to
+  `manifests\`, keeps a weekly dated zip in `weekly\`, and copies the restore playbook
+  to `restore\`. Config: `backupDev.{includesFile,weeklyZip,excludeDirectories,excludeFiles}`.
+- **Restore**: [modules/backup-dev/restore-dev.md](modules/backup-dev/restore-dev.md) and
+  `restore-dev.ps1` (repos, then files, then packages; supports `-WhatIf`)
+- **Details**: [modules/backup-dev/README.md](modules/backup-dev/README.md)
 
 ### 6. Version Bumping (Critical for Releases)
 

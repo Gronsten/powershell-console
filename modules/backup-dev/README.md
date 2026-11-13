@@ -1,242 +1,176 @@
 # Backup-Dev Module
 
-A PowerShell module for [powershell-console](../../README.md) that provides intelligent backup functionality for the dev directory with multiple operation modes.
+Allowlist-based backup of the dev environment to a cloud-synced folder, with
+package manifests and a weekly recovery zip. Added in v1.23.0, replacing the
+old whole-folder robocopy backup.
 
-## Features
+## Table of Contents
 
-- **Multiple Backup Modes**
-  - Full backup (copy mode - safer, keeps old files by default)
-  - Mirror mode (optional - exact mirror with deletions, use with caution)
-  - Test mode (preview limited number of operations)
-  - Count mode (count files and directories only)
-- **Configurable Exclusions** - Exclude directories and files via config.json patterns
-- **Progress Tracking** - Real-time progress indicators during operations
-- **Fully Configurable** - All settings managed through config.json
-- **Comprehensive Logging** - Detailed logs in backup-dev.log and rotating history in backup-history.log
+- [How it works](#how-it-works)
+- [Requirements](#requirements)
+- [Configuration](#configuration)
+- [The allowlist](#the-allowlist)
+- [Usage](#usage)
+- [Backup layout](#backup-layout)
+- [Restoring](#restoring)
+- [Safety checks](#safety-checks)
+- [Files in this module](#files-in-this-module)
+
+## How it works
+
+Backing up everything under the dev root is wasteful: most of it is code that
+already lives in a Git remote, or regenerable data (`node_modules`, VHDs).
+This module backs up only what Git does not protect:
+
+1. Folders that are not Git repositories.
+2. Gitignored local files (config, secrets, local state) inside repos that do
+   have a remote.
+3. Repos that have no remote yet (including their `.git` folder).
+4. Machine configuration under the user profile.
+
+Each run:
+
+1. **Mirrors** the allowlisted paths with `robocopy /MIR` to
+   `<destination>\files\`.
+2. **Writes package manifests** (scoop, winget, npm globals, pip, VS Code
+   extensions, PowerShell modules, .NET SDKs, Git repo list) to
+   `<destination>\manifests\`.
+3. **Saves unpushed work** for repos that have a remote: uncommitted changes
+   (`uncommitted.patch`, plus small untracked files) and unpushed commits
+   (`unpushed.bundle`) go to `<destination>\wip\`. Remotes matching
+   `backupDev.wip.excludeRemotePatterns` are skipped (use it for an employer's org).
+4. **Copies the restore playbook** to `<destination>\restore\`.
+5. **Creates a weekly zip** of `files\` and `manifests\` in
+   `<destination>\weekly\` when the newest one is older than
+   `intervalDays`, keeping the newest `keep` zips.
+
+The mirror propagates deletions, so the weekly zips are what allow recovering
+an accidentally deleted or overwritten item.
 
 ## Requirements
 
-- **PowerShell 5.1+** (Windows PowerShell or PowerShell Core)
-- **Robocopy** (included with Windows)
+- PowerShell 7+
+- `robocopy` (built into Windows)
+- A destination folder whose parent already exists, normally a cloud-drive
+  folder. The script refuses to run if the parent is missing, so an unmounted
+  drive never creates a stray local folder.
+- Optional tools used for manifests (each is skipped if absent): `scoop`,
+  `winget`, `npm`, `pip`, `code`, `dotnet`, `git`
 
 ## Configuration
 
-Edit `config.json` in the powershell-console root directory. The configuration has two main sections:
-
-### Basic Paths
+`config.json` (see `config.example.json`):
 
 ```json
 {
   "paths": {
-    "backupSource": "C:\\AppInstall\\dev",
-    "backupDestination": "OneDrive - Company\\DevBackups"
-  }
-}
-```
-
-### Exclusion Configuration
-
-```json
-{
+    "devRoot": "C:\\path\\to\\dev",
+    "backupDestination": "C:\\path\\to\\cloud-drive\\DevBackup"
+  },
   "backupDev": {
-    "excludeDirectories": [
-      "node_modules",
-      ".git",
-      "bin",
-      "obj",
-      ".vscode",
-      "_prod"
-    ],
-    "excludeFiles": [
-      "*.log",
-      "*.tmp",
-      "*.bak",
-      "*.vhdx"
-    ],
-    "customExclusions": {
-      "directories": ["my-custom-folder"],
-      "files": ["*.custom"]
-    },
-    "mirrorMode": false
+    "includesFile": "backup-includes.txt",
+    "weeklyZip": { "enabled": true, "intervalDays": 7, "keep": 8 },
+    "excludeDirectories": ["node_modules", ".terraform", ".venv"],
+    "excludeFiles": ["*.vhdx", "*.vsix"]
   }
 }
 ```
 
-### Configuration Options
+| Setting | Meaning |
+|---|---|
+| `paths.devRoot` | Root of the dev folder. The `%DEV%` token in the allowlist |
+| `paths.backupDestination` | Absolute path, or a path relative to the user profile |
+| `backupDev.includesFile` | Allowlist file, relative to this module folder |
+| `backupDev.wip.*` | Unpushed-work capture on/off, max untracked file size (MB), remote patterns to skip |
+| `backupDev.weeklyZip.*` | Zip on/off, minimum days between zips, zips to keep |
+| `backupDev.excludeDirectories` | Directory names skipped inside every mirrored folder |
+| `backupDev.excludeFiles` | File patterns skipped inside every mirrored folder |
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `excludeDirectories` | Array | See [config.example.json](../../config.example.json) | Directory names to exclude anywhere in the tree |
-| `excludeFiles` | Array | See [config.example.json](../../config.example.json) | File patterns to exclude (supports wildcards like `*.log`) |
-| `customExclusions.directories` | Array | `[]` | User-defined directory exclusions |
-| `customExclusions.files` | Array | `[]` | User-defined file exclusions |
-| `mirrorMode` | Boolean | `false` | **WARNING:** When `true`, uses `/MIR` which DELETES files in destination not in source |
+## The allowlist
 
-**Safety Note:** Mirror mode is disabled by default. The safer `/E` (copy) mode is used instead, which preserves old files in the destination.
+`backup-includes.txt` is **local only and gitignored**, because it names your
+own folders. Start from the tracked template:
+
+```powershell
+Copy-Item backup-includes.example.txt backup-includes.txt
+```
+
+Syntax, one entry per line:
+
+| Entry | Meaning |
+|---|---|
+| `%DEV%\path` | File or folder under `paths.devRoot` |
+| `%HOME%\path` | File or folder under the user profile |
+| `!<path>` | Exclude a sub-path of an include above |
+| `# text` | Comment |
+
+Folders are mirrored (`/MIR`). Single files are copied without touching their
+siblings.
 
 ## Usage
 
-### From console.ps1 Menu (Recommended)
+From the console: main menu, "Backup Dev Environment", which offers dry run,
+count, full backup, refresh manifests, restore preview (WhatIf), and log viewers.
 
-The easiest way to use backup-dev is through the console.ps1 menu:
-
-1. Run `console.ps1`
-2. Select "Backup" from the menu
-3. Choose your backup mode:
-   - **Count Only** - Count files and directories
-   - **Test Mode** - Preview limited operations (configurable limit, minimum 100)
-   - **Full Backup** - Complete mirror with deletions
-
-### Direct Script Usage
-
-You can also call the script directly:
+From a shell:
 
 ```powershell
-# Dry-run (simulate full backup without copying)
-.\modules\backup-dev\backup-dev.ps1 --dry-run
-
-# Count only (quick statistics)
-.\modules\backup-dev\backup-dev.ps1 --count
-
-# Test mode with default limit (100 items, DOES copy)
-.\modules\backup-dev\backup-dev.ps1 --test-mode
-
-# Test mode with custom limit (minimum 100, DOES copy)
-.\modules\backup-dev\backup-dev.ps1 --test-mode 250
-
-# Full backup (actual copy)
-.\modules\backup-dev\backup-dev.ps1
-
-# Show help
-.\modules\backup-dev\backup-dev.ps1 --help
+pwsh -NoProfile -File modules\backup-dev\backup-dev.ps1 --dry-run
 ```
 
-## Command-Line Options
+| Option | Effect |
+|---|---|
+| (none) | Full backup: mirror, manifests, weekly zip if due |
+| `--dry-run` | Show per-item files to copy and delete; write nothing |
+| `--count` | Show inventory of what the allowlist covers; write nothing |
+| `--manifests-only` | Refresh the package manifests only |
+| `--zip` | Force a weekly zip even if one is recent |
+| `--no-zip` | Skip the weekly zip |
+| `--help` | Show usage |
 
-| Option | Description | Copies Files? |
-|--------|-------------|---------------|
-| `--dry-run` | Simulate full backup with progress tracking (list-only mode with `/L` flag) | **No** - Safe simulation |
-| `--count` | Quick count of files and directories, then exit | **No** - Statistics only |
-| `--test-mode [N]` | Limited backup: preview first N operations (N >= 100, default: 100) | **Yes** - Copies limited files |
-| `--help` | Show help message | N/A |
-| *(none)* | Full backup with all files | **Yes** - Full copy |
+Exit codes: `0` success, `1` configuration or environment error, `2` completed
+with failed or skipped items.
 
-**Safety Notes:**
-- Use `--dry-run` for safe testing in DEV before running actual backups
-- Use `--count` for quick statistics without any copying
-- Test mode DOES copy files (limited to N operations)
-- The `--count` option runs alone and ignores other switches
+## Backup layout
 
-## How It Works
+```text
+<destination>\
+  files\dev\...      mirrored items from the dev root
+  files\home\...     mirrored items from the user profile
+  manifests\         scoop.json, winget.json, npm-global.json, pip.txt,
+                     vscode-extensions.txt, psmodules.json, dotnet-sdks.txt,
+                     repos.json, generated.txt
+  wip\               per-repo unpushed work (patch, untracked files, bundle)
+  weekly\            dev-YYYY-MM-DD.zip (newest N kept)
+  restore\           restore-dev.md and restore-dev.ps1
+```
 
-### Backup Process
+## Restoring
 
-1. **Load Configuration** - Reads source/destination paths and exclusion rules from config.json
-2. **Build Exclusion Flags** - Constructs robocopy `/XD` and `/XF` flags from config
-3. **Pass 1: Count Files** - Scans source to determine total files/directories (with exclusions applied)
-4. **Pass 2: Execute Backup** - Uses robocopy with progress tracking
-5. **Log Results** - Records operations to backup-dev.log and backup-history.log (rotating last 7)
-
-### Exclusion System
-
-The backup uses robocopy's `/XD` (exclude directories) and `/XF` (exclude files) flags:
-
-**Default Directory Exclusions** (from config.example.json):
-- `node_modules`, `.git`, `bin`, `obj` - Development artifacts
-- `.vscode`, `.idea`, `.vs` - IDE configuration
-- `_prod`, `dist`, `build`, `.next` - Build outputs
-- `__pycache__`, `.pytest_cache`, `coverage` - Python/test artifacts
-- `.terraform`, `.gradle`, `target`, `vendor` - Language-specific
-
-**Default File Exclusions** (from config.example.json):
-- `*.log`, `*.tmp`, `*.bak` - Temporary files
-- `*.vhdx`, `*.iso`, `*.vmdk` - Virtual machine images
-- `*.pyc`, `*.class`, `*.jar` - Compiled artifacts
-- `.DS_Store`, `Thumbs.db`, `desktop.ini` - System files
-
-**How Exclusions Work:**
-- Directory exclusions match by **name** anywhere in the tree
-- File exclusions support **wildcards** (`*.ext`)
-- Custom exclusions can be added via `customExclusions` section
-- All exclusions combine (default + custom)
-
-### Logging
-
-Two log files are maintained:
-- **backup-dev.log** - Current session log (detailed)
-- **backup-history.log** - Historical log with timestamps (cumulative)
-
-## Integration with console.ps1
-
-The backup-dev module integrates with console.ps1 through helper functions:
-
-- `Get-BackupScriptPath` - Locates the backup script
-- `Invoke-BackupScript` - Executes backup with specified arguments
-- `Start-BackupCountMode` - Runs count-only mode
-- `Start-BackupTestMode` - Runs test mode with user-provided limit
-- `Start-BackupDevEnvironment` - Runs full backup with confirmation
-
-## Troubleshooting
-
-### Script Not Found
-
-If you see "backup-dev.ps1 not found", verify:
-1. The script exists in `modules/backup-dev/backup-dev.ps1`
-2. You're running from the correct directory
-
-### Config File Not Found
-
-If you see "Config file not found", verify:
-1. `config.json` exists in the powershell-console root
-2. The file contains valid JSON
-3. Paths are specified with double backslashes (`\\`) on Windows
-
-### Backup Not Working
-
-1. **Check paths** in config.json are correct
-2. **Verify permissions** to read source and write to destination
-3. **Check disk space** on destination drive
-4. **Review logs** in backup-dev.log for detailed error messages
-
-## Examples
-
-### Example: Count Mode
+See [restore-dev.md](restore-dev.md). The short version:
 
 ```powershell
-PS C:\AppInstall\dev\powershell-console> .\modules\backup-dev\backup-dev.ps1 --count
-COUNT MODE - Only scanning source files
-
-Source Inventory vs. Changes
-───────────────────────────────────────────
-               Inventory   Need to Copy
-───────────────────────────────────────────
-  Directories:      1,234            45
-  Files:          123,456         1,234
-───────────────────────────────────────────
-  Total:          124,690         1,279
-───────────────────────────────────────────
+pwsh -NoProfile -File "<backup>\restore\restore-dev.ps1" -BackupPath "<backup>" -WhatIf
 ```
 
-### Example: Test Mode
+## Safety checks
 
-```powershell
-PS C:\AppInstall\dev\powershell-console> .\modules\backup-dev\backup-dev.ps1 --test-mode 250
-Test mode will preview a limited number of operations.
-Limit: 250 items
+- The destination's parent folder must exist.
+- A list-only pass runs before every mirror. If a source folder has no files
+  but its mirror does, that item is skipped rather than purged.
+- The weekly zip is built in the temp folder and moved into place, so a
+  cloud-sync client never uploads a half-written zip.
+- Locked sockets and lock files (for example GPG agent sockets) are excluded.
+- A backup is only off-site once the cloud-drive app reports it as synced; the
+  script warns if the drive app is not running.
 
-Processing first 250 items...
-[Preview of operations...]
-```
+## Files in this module
 
-## Contributing
-
-This module is part of the powershell-console project. See the main [CHANGELOG.md](../../CHANGELOG.md) for version history.
-
-To report issues or suggest features:
-1. Open an issue on the GitHub repository
-2. Include your PowerShell version and OS details
-3. Provide relevant log excerpts from backup-dev.log
-
-## License
-
-Same license as powershell-console. See main repository for details.
+| File | Purpose |
+|---|---|
+| `backup-dev.ps1` | Backup script |
+| `backup-includes.example.txt` | Allowlist template (tracked) |
+| `backup-includes.txt` | Your allowlist (gitignored) |
+| `restore-dev.ps1` | Restore script |
+| `restore-dev.md` | Restore playbook |
+| `backup-dev.log`, `backup-history.log` | Detailed log and last 10 runs (gitignored) |
