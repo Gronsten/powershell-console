@@ -5,7 +5,6 @@
     "oktaYamlPath": "C:\\Users\\YourUsername\\.okta\\okta.yaml",
     "rdcManagerPath": "C:\\path\\to\\RDCMan.exe",
     "linksPath": "C:\\Users\\YourUsername\\Favorites\\Links\\",
-    "backupSource": "C:\\AppInstall\\",
     "backupDestination": "C:\\path\\to\\cloud-drive\\DevBackup",
     "devRoot": "C:\\path\\to\\dev",
     "vpnOutputPath": "C:\\path\\to\\vpn_output"

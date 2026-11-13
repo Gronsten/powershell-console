@@ -638,21 +638,18 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
 - Output: Color-coded table with included/excluded file counts per project
 - Configuration: Edit `config.json` → `lineCounter` section to customize exclusions
 
-**Backup Dev Environment**: `Start-BackupDevEnvironment` (line ~3300)
+**Backup Dev Environment**: `Start-BackupDevEnvironment`
 - Module: modules/backup-dev/backup-dev.ps1
 - Features:
-  - Two-pass operation (count → backup)
-  - Multiple modes: full, test (limited ops), list-only, count-only
-  - Visual progress indicators (spinner, percentage)
-  - Dual logging: detailed log + rotating summary history (last 7)
-  - Uses robocopy with /MIR flag (true synchronization)
-  - GNU-style arguments (--test-mode, --list-only, --count, --help)
+  - Allowlist mirror (`backup-includes.txt`) with robocopy /MIR to a cloud-synced folder
+  - Package manifests, unpushed-work capture, weekly recovery zip
+  - Safety checks (destination parent must exist; empty-source guard)
+  - GNU-style arguments (--dry-run, --count, --manifests-only, --zip, --no-zip, --help)
 - Execution:
   ```powershell
-  .\modules\backup-dev\backup-dev.ps1 --test-mode
+  .\modules\backup-dev\backup-dev.ps1 --dry-run
   .\modules\backup-dev\backup-dev.ps1        # Full backup
   ```
-
 ---
 
 ## Key Functions Reference

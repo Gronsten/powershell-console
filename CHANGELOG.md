@@ -28,7 +28,8 @@ All notable changes to this project have been documented during development.
 - Replaced the `backupDev` section: removed `exclusions`, `mirrorMode` and the
   related comments; added `includesFile`, `weeklyZip`, `excludeDirectories` and
   `excludeFiles` (see `config.example.json`).
-- `paths.backupSource` is no longer used by backup-dev (it can be left in place).
+- `paths.backupSource` is no longer used and was removed from `config.example.json`
+  (an existing value in `config.json` is harmless).
 - Create `modules/backup-dev/backup-includes.txt` from
   `backup-includes.example.txt`. The file is gitignored.
 
