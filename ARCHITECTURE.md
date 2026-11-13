@@ -638,21 +638,18 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "vpnOutputPath" -and
 - Output: Color-coded table with included/excluded file counts per project
 - Configuration: Edit `config.json` → `lineCounter` section to customize exclusions
 
-**Backup Dev Environment**: `Start-BackupDevEnvironment` (line ~3300)
+**Backup Dev Environment**: `Start-BackupDevEnvironment`
 - Module: modules/backup-dev/backup-dev.ps1
 - Features:
-  - Two-pass operation (count → backup)
-  - Multiple modes: full, test (limited ops), list-only, count-only
-  - Visual progress indicators (spinner, percentage)
-  - Dual logging: detailed log + rotating summary history (last 7)
-  - Uses robocopy with /MIR flag (true synchronization)
-  - GNU-style arguments (--test-mode, --list-only, --count, --help)
+  - Allowlist mirror (`backup-includes.txt`) with robocopy /MIR to a cloud-synced folder
+  - Package manifests, unpushed-work capture, weekly recovery zip
+  - Safety checks (destination parent must exist; empty-source guard)
+  - GNU-style arguments (--dry-run, --count, --manifests-only, --zip, --no-zip, --help)
 - Execution:
   ```powershell
-  .\modules\backup-dev\backup-dev.ps1 --test-mode
+  .\modules\backup-dev\backup-dev.ps1 --dry-run
   .\modules\backup-dev\backup-dev.ps1        # Full backup
   ```
-
 ---
 
 ## Key Functions Reference
@@ -1172,9 +1169,17 @@ function Get-MyAwsResource {
 
 **backup-dev module**:
 - **Location**: [modules/backup-dev/backup-dev.ps1](modules/backup-dev/backup-dev.ps1:1)
-- **Invocation**: `Start-BackupDevEnvironment` in console.ps1
-- **Execution**: `.\modules\backup-dev\backup-dev.ps1 [args]`
+- **Invocation**: `Start-BackupDevEnvironment` in console.ps1 (menu "Backup Dev Environment")
+- **Execution**: `.\modules\backup-dev\backup-dev.ps1 [--dry-run|--count|--manifests-only|--zip|--no-zip]`
 - **Standalone**: Can be run directly outside console.ps1
+- **Design (v1.23.0)**: allowlist backup, not a whole-folder copy. Mirrors the paths in
+  the gitignored `backup-includes.txt` (template: `backup-includes.example.txt`) to
+  `<paths.backupDestination>\files\{dev,home}`, writes package manifests to
+  `manifests\`, keeps a weekly dated zip in `weekly\`, and copies the restore playbook
+  to `restore\`. Config: `backupDev.{includesFile,weeklyZip,excludeDirectories,excludeFiles}`.
+- **Restore**: [modules/backup-dev/restore-dev.md](modules/backup-dev/restore-dev.md) and
+  `restore-dev.ps1` (repos, then files, then packages; supports `-WhatIf`)
+- **Details**: [modules/backup-dev/README.md](modules/backup-dev/README.md)
 
 ### 6. Version Bumping (Critical for Releases)
 

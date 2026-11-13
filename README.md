@@ -199,35 +199,37 @@ See [SETUP.md](SETUP.md) for detailed configuration instructions.
 
 ### Backup Dev Environment Workflow
 
-The backup-dev.ps1 script can be run directly from PowerShell with various options:
+Allowlist backup to a cloud-synced folder: mirrors only the paths in your local
+`backup-includes.txt`, writes package manifests, saves unpushed work, and makes a
+weekly recovery zip. Use the "Backup Dev Environment" menu, or run the script
+directly:
 
 ```powershell
-# Full backup (with confirmation)
-.\backup-dev.ps1
+# Full backup: mirror + manifests + unpushed work + weekly zip if due
+.\modules\backup-dev\backup-dev.ps1
 
-# Test mode - preview first 100 operations
-.\backup-dev.ps1 --test-mode
+# Preview what would be copied or deleted (writes nothing)
+.\modules\backup-dev\backup-dev.ps1 --dry-run
 
-# Test mode with custom limit (250+ operations)
-.\backup-dev.ps1 --test-mode 500
+# Inventory of what the allowlist covers (writes nothing)
+.\modules\backup-dev\backup-dev.ps1 --count
 
-# List-only mode - preview all changes without executing
-.\backup-dev.ps1 --list-only
-
-# Count-only mode - just count files and directories
-.\backup-dev.ps1 --count
+# Refresh package manifests only
+.\modules\backup-dev\backup-dev.ps1 --manifests-only
 
 # Help - show all available options
-.\backup-dev.ps1 --help
+.\modules\backup-dev\backup-dev.ps1 --help
 ```
 
 **Features:**
-- **Two-pass operation**: First pass counts files, second pass performs backup with accurate progress
-- **Visual progress**: Real-time progress bar with percentage, spinner, and statistics
-- **Smart logging**: Detailed operation log + rotating summary history (keeps last 7)
-- **Safe testing**: Test and list-only modes let you preview before executing
-- **Efficient mirroring**: Uses robocopy with /MIR flag for true synchronization
+- **Allowlist**: backs up only what Git does not protect (non-repo folders, gitignored config, repos with no remote)
+- **Package manifests**: scoop, winget, npm, pip, VS Code, PowerShell modules, Git repo list
+- **Weekly zip**: dated recovery zips with retention
+- **Unpushed work**: patch and bundle for repos with a remote
+- **Restore**: `restore-dev.ps1` rebuilds an environment (preview with the "Restore Preview (WhatIf)" menu item)
 
+See [modules/backup-dev/README.md](modules/backup-dev/README.md) and
+[modules/backup-dev/restore-dev.md](modules/backup-dev/restore-dev.md).
 ### Menu Customization
 
 - **Move items**: Press Ctrl+Space, use arrows to reposition, Enter to save

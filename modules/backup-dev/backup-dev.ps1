@@ -1,617 +1,547 @@
+#Requires -Version 7.0
+<#
+.SYNOPSIS
+    Allowlist-based backup of the dev environment to a cloud-synced folder.
 
-# DevBackup Script
-# Backs up dev folder to configured backup destination
+.DESCRIPTION
+    Replaces the old whole-dev-folder robocopy approach (v1.x) with a
+    small, allowlisted backup:
 
-# Parameters - Parse GNU-style arguments
-$testMode = $false
-$countOnly = $false
+      1. Mirrors only the paths listed in backup-includes.txt (robocopy /MIR) to
+         <destination>\files\dev\... and <destination>\files\home\...
+      2. Writes package-manager manifests (scoop, winget, npm, pip, VS Code,
+         PowerShell modules, dotnet, Git repo list) to <destination>\manifests\
+      3. Creates a weekly dated zip of files + manifests in <destination>\weekly\
+         so accidentally deleted or overwritten items can be recovered (the
+         mirror itself propagates deletions).
+
+    Code that already lives in a Git remote is NOT backed up; the allowlist covers
+    only what Git does not: non-repo folders, gitignored config/secrets, and
+    repos that have no remote yet. See restore-dev.md for the restore playbook.
+
+    The allowlist (backup-includes.txt) is local-only and gitignored because it
+    names personal folders. backup-includes.example.txt documents the syntax.
+
+.NOTES
+    Options (GNU style, kept for console.ps1 compatibility):
+      --dry-run          List what would be copied/deleted; write nothing
+      --count            Show the inventory of what the allowlist covers; write nothing
+      --manifests-only   Refresh package manifests only
+      --zip              Force a weekly zip even if one was made in the last 7 days
+      --no-zip           Skip the weekly zip
+      --help             Show usage
+#>
+
 $dryRun = $false
-$testModeLimit = 100  # Default limit for test mode
+$countOnly = $false
+$manifestsOnly = $false
+$forceZip = $false
+$noZip = $false
 
-# Parse arguments with support for values
-for ($i = 0; $i -lt $args.Count; $i++) {
-    $arg = $args[$i]
+function Show-Usage {
+    Write-Host "Usage: backup-dev.ps1 [OPTIONS]"
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  --dry-run         List what would be copied/deleted (writes nothing)"
+    Write-Host "  --count           Show inventory of what the allowlist covers (writes nothing)"
+    Write-Host "  --manifests-only  Refresh package manifests only"
+    Write-Host "  --zip             Force a weekly zip even if one is recent"
+    Write-Host "  --no-zip          Skip the weekly zip"
+    Write-Host "  --help            Show this help message"
+    Write-Host ""
+    Write-Host "With no options a full backup runs: mirror + manifests + weekly zip (if due)."
+}
 
+foreach ($arg in $args) {
     switch ($arg) {
-        "--test-mode" {
-            $testMode = $true
-
-            # Check if next argument is a number
-            if (($i + 1) -lt $args.Count) {
-                $nextArg = $args[$i + 1]
-                if ($nextArg -match '^\d+$') {
-                    $providedLimit = [int]$nextArg
-                    $i++  # Consume the numeric argument
-                    if ($providedLimit -ge 100) {
-                        $testModeLimit = $providedLimit
-                    } else {
-                        # If less than 100, use default but warn the user
-                        Write-Host "Warning: Test mode limit must be >= 100. Using default: 100" -ForegroundColor Yellow
-                        $testModeLimit = 100
-                    }
-                }
-            }
-        }
-        "--count" { $countOnly = $true }
-        "--dry-run" { $dryRun = $true }
-        "--help" {
-            Write-Host "Usage: backup-dev.ps1 [OPTIONS]"
-            Write-Host ""
-            Write-Host "Options:"
-            Write-Host "  --dry-run         Simulate full backup without copying files (list-only mode)"
-            Write-Host "  --test-mode [N]   Quick test: preview limited to N operations"
-            Write-Host "                    N must be >= 100 (default: 100 if not specified)"
-            Write-Host "  --count           Only count files and directories, then exit"
-            Write-Host "  --help            Show this help message"
-            Write-Host ""
-            Write-Host "Examples:"
-            Write-Host "  backup-dev.ps1 --dry-run         # Simulate full backup (no copying)"
-            Write-Host "  backup-dev.ps1 --test-mode       # Test with 100 items"
-            Write-Host "  backup-dev.ps1 --test-mode 250   # Test with 250 items"
-            Write-Host "  backup-dev.ps1 --count           # Quick count summary"
-            Write-Host "  backup-dev.ps1                   # Full backup (actual copy)"
-            Write-Host ""
-            Write-Host "Note: --count runs alone and ignores other switches"
-            exit 0
-        }
+        "--dry-run"        { $dryRun = $true }
+        "--count"          { $countOnly = $true }
+        "--manifests-only" { $manifestsOnly = $true }
+        "--zip"            { $forceZip = $true }
+        "--no-zip"         { $noZip = $true }
+        "--help"           { Show-Usage; exit 0 }
         default {
-            Write-Host ""
             Write-Error "Unknown option: $arg"
-            Write-Host ""
-            Write-Host "Usage: backup-dev.ps1 [OPTIONS]"
-            Write-Host ""
-            Write-Host "Options:"
-            Write-Host "  --dry-run         Simulate full backup without copying files (list-only mode)"
-            Write-Host "  --test-mode [N]   Quick test: preview limited to N operations"
-            Write-Host "                    N must be >= 100 (default: 100 if not specified)"
-            Write-Host "  --count           Only count files and directories, then exit"
-            Write-Host "  --help            Show this help message"
-            Write-Host ""
-            Write-Host "Examples:"
-            Write-Host "  backup-dev.ps1 --dry-run         # Simulate full backup (no copying)"
-            Write-Host "  backup-dev.ps1 --test-mode       # Test with 100 items"
-            Write-Host "  backup-dev.ps1 --count           # Quick count summary"
-            Write-Host ""
+            Show-Usage
             exit 1
         }
     }
 }
 
-# Helper function to draw separator lines
 function Write-Separator {
     Write-Host "==============================================" -ForegroundColor Cyan
 }
 
-# Load configuration
-# $scriptDir is modules/backup-dev/
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+# $scriptDir = modules/backup-dev/ ; $rootDir = project root (holds config.json)
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-# Go up one level from scriptDir: modules/backup-dev/ -> modules/
-$modulesDir = Split-Path -Parent $scriptDir
-# Go up one more level: modules/ -> powershell-console/
-$rootDir = Split-Path -Parent $modulesDir
+$rootDir = Split-Path -Parent (Split-Path -Parent $scriptDir)
 $configPath = Join-Path $rootDir "config.json"
 
 if (-not (Test-Path $configPath)) {
-    Write-Error "Config file not found at: $configPath"
-    Write-Error "Please create config.json from config.example.json"
+    Write-Error "Config file not found at: $configPath (create it from config.example.json)"
     exit 1
 }
 
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
+$bd = if ($config.PSObject.Properties.Name -contains "backupDev") { $config.backupDev } else { $null }
 
-# Read paths from config
-$source = $config.paths.backupSource
-$destination = Join-Path $env:USERPROFILE $config.paths.backupDestination
-
-# Function to build exclusion flags from config
-function Get-ExclusionFlags {
-    param($BackupConfig)
-
-    $excludeFlags = ""
-
-    # Check if backupDev section exists
-    if (-not $BackupConfig.PSObject.Properties.Name -contains "backupDev") {
-        Write-Host "Error: No 'backupDev' section in config.json" -ForegroundColor Red
-        Write-Host "Please add the 'backupDev' section from config.example.json to your config.json" -ForegroundColor Yellow
-        return ""
+# Helper: read an optional setting with a default
+function Get-BackupSetting {
+    param($Object, [string]$Name, $Default)
+    if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name -and $null -ne $Object.$Name) {
+        return $Object.$Name
     }
-
-    $backupDev = $BackupConfig.backupDev
-
-    # Check for unified exclusions structure (required as of v1.14.0)
-    if (-not ($backupDev.PSObject.Properties.Name -contains "exclusions")) {
-        Write-Host "Error: Config uses deprecated structure. Please update to unified exclusions format." -ForegroundColor Red
-        Write-Host "Required structure: backupDev.exclusions.{directories,files}" -ForegroundColor Yellow
-        Write-Host "See config.example.json for reference (config version: config.12+)" -ForegroundColor Yellow
-        return ""
-    }
-
-    $exclusions = $backupDev.exclusions
-    $allExcludeDirs = @()
-    $allExcludeFiles = @()
-
-    # Load exclusions from unified structure
-    if ($exclusions.PSObject.Properties.Name -contains "directories" -and $exclusions.directories) {
-        $allExcludeDirs += $exclusions.directories
-    }
-    if ($exclusions.PSObject.Properties.Name -contains "files" -and $exclusions.files) {
-        $allExcludeFiles += $exclusions.files
-    }
-
-    # Remove duplicates
-    $allExcludeDirs = $allExcludeDirs | Select-Object -Unique
-    $allExcludeFiles = $allExcludeFiles | Select-Object -Unique
-
-    # Build directory exclusion flags
-    if ($allExcludeDirs.Count -gt 0) {
-        $excludeFlags += " /XD"
-        foreach ($dir in $allExcludeDirs) {
-            # Quote directories with spaces
-            if ($dir -match '\s') {
-                $excludeFlags += " `"$dir`""
-            } else {
-                $excludeFlags += " $dir"
-            }
-        }
-    }
-
-    # Build file exclusion flags
-    if ($allExcludeFiles.Count -gt 0) {
-        $excludeFlags += " /XF"
-        foreach ($file in $allExcludeFiles) {
-            # Quote files with spaces
-            if ($file -match '\s') {
-                $excludeFlags += " `"$file`""
-            } else {
-                $excludeFlags += " $file"
-            }
-        }
-    }
-
-    return $excludeFlags
+    return $Default
 }
 
-# Get exclusion flags from config
-$exclusionFlags = Get-ExclusionFlags -BackupConfig $config
+$devRoot = ([string]$config.paths.devRoot).TrimEnd('\')
+$homeDir = $env:USERPROFILE.TrimEnd('\')
 
-# Determine mirror mode (default to false for safety)
-$useMirrorMode = $false
-if ($config.PSObject.Properties.Name -contains "backupDev" -and
-    $config.backupDev.PSObject.Properties.Name -contains "mirrorMode") {
-    $useMirrorMode = $config.backupDev.mirrorMode
-}
+# Destination may be absolute (e.g. a cloud-drive folder) or relative to the user profile
+$destRaw = [string]$config.paths.backupDestination
+$destination = if ([System.IO.Path]::IsPathRooted($destRaw)) { $destRaw } else { Join-Path $env:USERPROFILE $destRaw }
+$destination = $destination.TrimEnd('\')
+$filesRoot = Join-Path $destination "files"
+$manifestRoot = Join-Path $destination "manifests"
+$weeklyRoot = Join-Path $destination "weekly"
+$wipRoot = Join-Path $destination "wip"
 
-# Display exclusion info
-if ($exclusionFlags) {
-    Write-Host "Exclusions configured from config.json" -ForegroundColor Cyan
-} else {
-    Write-Host "No custom exclusions configured (only /XJ junction points excluded)" -ForegroundColor Yellow
-}
+$includesFile = Join-Path $scriptDir (Get-BackupSetting $bd "includesFile" "backup-includes.txt")
+$zipEnabled = [bool](Get-BackupSetting (Get-BackupSetting $bd "weeklyZip" $null) "enabled" $true)
+$zipKeep = [int](Get-BackupSetting (Get-BackupSetting $bd "weeklyZip" $null) "keep" 8)
+$zipIntervalDays = [int](Get-BackupSetting (Get-BackupSetting $bd "weeklyZip" $null) "intervalDays" 7)
 
-# Define log files (in module directory)
+# Default excludes apply to every mirrored folder (regenerable or unsafe to copy)
+$defaultExcludeDirs = @(Get-BackupSetting $bd "excludeDirectories" @(
+        "node_modules", ".terraform", ".venv", "venv", "__pycache__", ".pytest_cache"))
+$defaultExcludeFiles = @(Get-BackupSetting $bd "excludeFiles" @(
+        "*.vhd", "*.vhdx", "*.vsix", "*.pyc", "*.pyo", "*.db.lock",
+        "S.gpg-agent*", "S.dirmngr", "S.keyboxd", "S.scdaemon", "gnupg_spawn_agent_sentinel*"))
+
 $detailedLog = Join-Path $scriptDir "backup-dev.log"
 $summaryLog = Join-Path $scriptDir "backup-history.log"
 
-# Create destination if it doesn't exist
-New-Item -ItemType Directory -Path $destination -Force -ErrorAction SilentlyContinue | Out-Null
-
-# Timestamp
-$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$scriptStartTime = Get-Date
-
-# Clear previous detailed log and start new one
-# Determine backup mode for log
-$backupMode = if ($countOnly) { "COUNT" } elseif ($dryRun) { "DRY-RUN" } elseif ($testMode) { "TEST" } else { "FULL" }
-Set-Content -Path $detailedLog -Value "=== Backup started: $timestamp | Mode: $backupMode ==="
-
-Write-Host ""
-Write-Separator
-if ($countOnly) {
-    Write-Host "  COUNT MODE - Only scanning source files" -ForegroundColor Yellow
-} elseif ($dryRun) {
-    Write-Host "  DRY-RUN MODE - Simulating backup (no files copied)" -ForegroundColor Cyan
-    Write-Host "  Backup Started: $timestamp" -ForegroundColor Cyan
-
-    # Display what mode would be used
-    if ($useMirrorMode) {
-        Write-Host "  Would use: MIRROR (/MIR) - Would DELETE files not in source" -ForegroundColor Yellow
-    } else {
-        Write-Host "  Would use: COPY (/E) - Would keep old files (safer)" -ForegroundColor Green
-    }
-} else {
-    if ($testMode) {
-        Write-Host "  TEST MODE - Limited to $testModeLimit operations" -ForegroundColor Yellow
-    }
-    Write-Host "  Backup Started: $timestamp" -ForegroundColor Cyan
-
-    # Display backup mode warning
-    if ($useMirrorMode) {
-        Write-Host "  Mode: MIRROR (/MIR) - DELETES files not in source" -ForegroundColor Red
-        Write-Host "  WARNING: Destination will be an exact mirror of source!" -ForegroundColor Red
-    } else {
-        Write-Host "  Mode: COPY (/E) - Keeps old files (safer)" -ForegroundColor Green
-    }
-}
-Write-Separator
-Write-Host ""
-
-# Progress tracking variables
-$script:dirCount = 0
-$script:fileCount = 0
-$script:copiedCount = 0
-$script:extraCount = 0
-$script:lastUpdateTime = Get-Date
-$script:totalFiles = 0
-$script:totalDirs = 0
-
-# Function to draw progress bar
-function Show-Progress {
-    param(
-        [int]$Dirs,
-        [int]$Files,
-        [int]$Copied,
-        [int]$Extra,
-        [string]$CurrentFile = "",
-        [int]$TotalFiles = 0,
-        [int]$TotalDirs = 0,
-        [switch]$Force
-    )
-
-    $elapsed = (Get-Date) - $script:lastUpdateTime
-    if (-not $Force -and $elapsed.TotalMilliseconds -lt 500 -and $CurrentFile -eq "") { return }
-    $script:lastUpdateTime = Get-Date
-
-    $width = 40
-    $spinnerChars = @('|', '/', '-', '\')
-    $spinnerIndex = [math]::Floor((Get-Date).Millisecond / 250) % 4
-    $spinner = $spinnerChars[$spinnerIndex]
-
-    # Create progress bar based on actual progress
-    if ($TotalFiles -gt 0 -and $TotalDirs -gt 0) {
-        $totalItems = $TotalFiles + $TotalDirs
-        $currentItems = $Files + $Dirs
-        $percentage = [math]::Min([math]::Floor(($currentItems / $totalItems) * 100), 100)
-        $filled = [math]::Min([math]::Floor(($currentItems / $totalItems) * $width), $width)
-        $bar = ('#' * $filled).PadRight($width, '-')
-
-        Write-Host "`r[$bar] $spinner $percentage% " -NoNewline -ForegroundColor Green
-    } else {
-        # Fallback for counting phase
-        $filled = [math]::Min([math]::Floor(($Files % 100) * $width / 100), $width)
-        $bar = ('#' * $filled).PadRight($width, '-')
-        Write-Host "`r[$bar] $spinner " -NoNewline -ForegroundColor Green
-    }
-
-    Write-Host "Dirs: $Dirs | Files: $Files | Copied: $Copied | Extra: $Extra" -NoNewline -ForegroundColor Yellow
-
-    if ($CurrentFile -ne "") {
-        Write-Host "`n  $CurrentFile" -ForegroundColor Gray
-    }
+# ---------------------------------------------------------------------------
+# Allowlist parsing
+# ---------------------------------------------------------------------------
+function Resolve-BackupToken {
+    param([string]$Text)
+    return $Text.Replace('%DEV%', $devRoot).Replace('%HOME%', $homeDir)
 }
 
-# PASS 1: Count total files and directories
-if ($testMode) {
-    Write-Host "Pass 1: Quick scan (limited to $testModeLimit items for test mode)..." -ForegroundColor Cyan
-} elseif ($dryRun) {
-    Write-Host "Pass 1: Scanning source directory to count files (dry-run)..." -ForegroundColor Cyan
-} else {
-    Write-Host "Pass 1: Scanning source directory to count files..." -ForegroundColor Cyan
+# Map a source path to its location under <destination>\files
+function Get-MirrorTarget {
+    param([string]$FullPath)
+    if ($FullPath.StartsWith("$devRoot\", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return Join-Path $filesRoot ("dev\" + $FullPath.Substring($devRoot.Length + 1))
+    }
+    if ($FullPath.StartsWith("$homeDir\", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return Join-Path $filesRoot ("home\" + $FullPath.Substring($homeDir.Length + 1))
+    }
+    return $null
 }
 
-$countLog = Join-Path $scriptDir "temp_count_log.txt"
+function Get-BackupItems {
+    if (-not (Test-Path $includesFile)) {
+        Write-Host "Allowlist not found: $includesFile" -ForegroundColor Red
+        Write-Host "Copy backup-includes.example.txt to backup-includes.txt and edit it." -ForegroundColor Yellow
+        return $null
+    }
 
-# Run robocopy in list-only mode to count files
-# For count-only mode, use /E instead of /MIR to only count source files (not deletes)
-# For backup operations, use config setting (default /E for safety)
-$robocopyMode = if ($countOnly) { "/E" } elseif ($useMirrorMode) { "/MIR" } else { "/E" }
+    $includes = [System.Collections.Generic.List[string]]::new()
+    $excludes = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in Get-Content $includesFile) {
+        $text = $line.Trim()
+        if ($text -eq "" -or $text.StartsWith("#")) { continue }
+        if ($text.StartsWith("!")) {
+            $excludes.Add((Resolve-BackupToken $text.Substring(1).Trim()).TrimEnd('\'))
+        } else {
+            $includes.Add((Resolve-BackupToken $text).TrimEnd('\'))
+        }
+    }
 
-$countJob = Start-Job -ScriptBlock {
-    param($src, $dst, $log, $mode, $exclusions)
-    $cmd = "robocopy `"$src`" `"$dst`" /L $mode /R:0 /W:0 /LOG:`"$log`" /NP /NDL /XJ $exclusions 2>&1"
-    Invoke-Expression $cmd
-} -ArgumentList $source, $destination, $countLog, $robocopyMode, $exclusionFlags
+    $items = @()
+    foreach ($src in $includes) {
+        $target = Get-MirrorTarget $src
+        if (-not $target) {
+            Write-Host "  Skipping (not under DEV or HOME): $src" -ForegroundColor Yellow
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $src)) {
+            Write-Host "  Skipping (not found): $src" -ForegroundColor Yellow
+            continue
+        }
+        $isDir = (Get-Item -LiteralPath $src -Force).PSIsContainer
+        # Excludes that fall inside this include
+        $under = @($excludes | Where-Object { $_.StartsWith("$src\", [System.StringComparison]::OrdinalIgnoreCase) })
+        $items += [pscustomobject]@{
+            Source = $src
+            Dest   = $target
+            IsDir  = $isDir
+            XDirs  = @($under | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+            XFiles = @($under | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+        }
+    }
+    return $items
+}
 
-$countStartTime = Get-Date
-$countLimitReached = $false
+# ---------------------------------------------------------------------------
+# Mirror (robocopy)
+# ---------------------------------------------------------------------------
+function Invoke-ItemMirror {
+    param($Item, [switch]$ListOnly)
 
-# Monitor counting progress
-while ($countJob.State -eq 'Running') {
-    Start-Sleep -Milliseconds 200
+    if ($Item.IsDir) {
+        $rcArgs = @($Item.Source, $Item.Dest, "/MIR", "/XD") + $defaultExcludeDirs + $Item.XDirs +
+                  @("/XF") + $defaultExcludeFiles + $Item.XFiles
+    } else {
+        # Single file: copy only that file (no /MIR, so siblings are untouched)
+        $rcArgs = @((Split-Path $Item.Source -Parent), (Split-Path $Item.Dest -Parent), (Split-Path $Item.Source -Leaf))
+    }
+    $rcArgs += @("/XJ", "/R:2", "/W:2", "/NP", "/BYTES", "/NDL", "/NJH")
+    if ($ListOnly) { $rcArgs += "/L" }
 
-    if (Test-Path $countLog) {
+    $out = & robocopy @rcArgs 2>&1
+    $rc = $LASTEXITCODE
+    $text = ($out | ForEach-Object { "$_" }) -join "`n"
+
+    $files = @(0, 0, 0, 0, 0, 0)
+    if ($text -match '(?m)^\s*Files\s*:\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)') {
+        $files = 1..6 | ForEach-Object { [int64]$Matches[$_] }
+    }
+    $bytes = @(0, 0, 0, 0, 0, 0)
+    if ($text -match '(?m)^\s*Bytes\s*:\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)') {
+        $bytes = 1..6 | ForEach-Object { [int64]$Matches[$_] }
+    }
+
+    if (-not $ListOnly) { Add-Content -Path $detailedLog -Value "--- $($Item.Source)`n$text" }
+
+    [pscustomobject]@{
+        Name        = $Item.Source
+        Total       = $files[0]
+        Copied      = $files[1]
+        Failed      = $files[4]
+        Extras      = $files[5]
+        Bytes       = $bytes[0]
+        BytesCopied = $bytes[1]
+        ExitCode    = $rc
+        # robocopy exit codes of 8 or higher mean at least one failure
+        HadError    = ($rc -ge 8)
+        # Source has no files but destination does: refuse to purge it with /MIR
+        EmptySource = ($Item.IsDir -and $files[0] -eq 0 -and $files[5] -gt 0)
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Package manifests
+# ---------------------------------------------------------------------------
+function Test-Tool { param([string]$Name) return [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
+
+function Export-PackageManifests {
+    param([string]$OutDir)
+
+    New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
+    $results = [ordered]@{}
+
+    # Each exporter is isolated so one missing tool never blocks the rest
+    $exporters = [ordered]@{
+        "scoop.json" = { if (Test-Tool scoop) { scoop export 2>$null } }
+        "npm-global.json" = { if (Test-Tool npm) { npm ls -g --depth=0 --json 2>$null } }
+        "pip.txt" = { if (Test-Tool pip) { pip freeze 2>$null } }
+        "vscode-extensions.txt" = { if (Test-Tool code) { code --list-extensions --show-versions 2>$null } }
+        "dotnet-sdks.txt" = { if (Test-Tool dotnet) { dotnet --list-sdks 2>$null } }
+        "psmodules.json" = {
+            Get-InstalledModule -ErrorAction SilentlyContinue |
+                Select-Object Name, Version, Repository | ConvertTo-Json
+        }
+    }
+    foreach ($name in $exporters.Keys) {
         try {
-            # Count lines in the log file as a proxy for progress
-            $lineCount = (Get-Content $countLog -ErrorAction SilentlyContinue).Count
-
-            # In test mode, stop counting after we have enough lines
-            # Robocopy outputs multiple lines per file/dir, so use 1.5x the limit
-            if ($testMode -and $lineCount -ge ($testModeLimit * 1.5)) {
-                Stop-Job $countJob
-                $countLimitReached = $true
-                # Don't clear the line - leave the scanning progress visible
-                break
+            $content = & $exporters[$name]
+            if ($content) {
+                Set-Content -Path (Join-Path $OutDir $name) -Value $content -Encoding utf8
+                $results[$name] = "ok"
+            } else {
+                $results[$name] = "skipped (tool missing or empty)"
             }
-
-            $elapsed = (Get-Date) - $countStartTime
-            Write-Host "`rScanning... Time: $($elapsed.ToString('mm\:ss')) | Lines: $lineCount" -NoNewline -ForegroundColor Yellow
-        }
-        catch {
-            # File might be locked, skip this iteration
+        } catch {
+            $results[$name] = "failed: $($_.Exception.Message)"
         }
     }
-}
 
-# Get final counts
-$null = Receive-Job $countJob -Wait -AutoRemoveJob
-
-if (Test-Path $countLog) {
-    $logContent = Get-Content $countLog -Raw
-
-    # In test mode with limit reached, use half the limit as estimate
-    if ($testMode -and $countLimitReached) {
-        # The scanning progress used -NoNewline, so output a newline to preserve it
-        Write-Host ""
-        # Set approximate values for test mode (split evenly between dirs and files)
-        $script:totalDirs = [int]($testModeLimit / 2)
-        $script:totalFiles = [int]($testModeLimit / 2)
+    # winget writes its own file; it exits non-zero when some packages have no source
+    if (Test-Tool winget) {
+        $wingetFile = Join-Path $OutDir "winget.json"
+        $null = winget export -o $wingetFile --accept-source-agreements --disable-interactivity 2>&1
+        $results["winget.json"] = if (Test-Path $wingetFile) { "ok" } else { "failed" }
     } else {
-        # The scanning progress used -NoNewline, so output a newline
-        Write-Host ""
-        # Parse the summary section for accurate counts
-        # Robocopy summary format: Total Copied Skipped Mismatch FAIL EXTRAS
-        # We want Copied + EXTRAS as these are the operations that will occur in Pass 2
-        if ($logContent -match '(?m)^\s+Dirs\s*:\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)') {
-            # Dirs: Total=1, Copied=2, Skipped=3, Mismatch=4, FAIL=5, EXTRAS=6
-            $dirsTotal = [int]$matches[1]
-            $dirsCopied = [int]$matches[2]
-            $dirsSkipped = [int]$matches[3]
-            $dirsExtras = [int]$matches[6]
-
-            # For inventory: use robocopy's "Total" column which is the source count
-            # This matches what Windows Explorer shows
-            $script:totalDirsInSource = $dirsTotal
-            # For "Need to Copy": operations that would occur (new/modified + deletes)
-            $script:totalDirs = $dirsCopied + $dirsExtras
-        }
-
-        if ($logContent -match '(?m)^\s+Files\s*:\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)') {
-            # Files: Total=1, Copied=2, Skipped=3, Mismatch=4, FAIL=5, EXTRAS=6
-            $filesTotal = [int]$matches[1]
-            $filesCopied = [int]$matches[2]
-            $filesSkipped = [int]$matches[3]
-            $filesExtras = [int]$matches[6]
-
-            # For inventory: use robocopy's "Total" column which is the source count
-            # This matches what Windows Explorer shows
-            $script:totalFilesInSource = $filesTotal
-            # For "Need to Copy": operations that would occur (new/modified + deletes)
-            $script:totalFiles = $filesCopied + $filesExtras
-        }
+        $results["winget.json"] = "skipped (tool missing)"
     }
 
-    Remove-Item $countLog -Force -ErrorAction SilentlyContinue
+    # Git repo list (relative to devRoot) so restore can re-clone code that lives on a remote
+    try {
+        $repos = Get-ChildItem -Path $devRoot -Directory -Recurse -Depth 2 -Force -Filter ".git" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $repoDir = $_.Parent.FullName
+                [pscustomobject]@{
+                    path   = $repoDir.Substring($devRoot.Length).TrimStart('\')
+                    remote = (git -C $repoDir remote get-url origin 2>$null)
+                    branch = (git -C $repoDir branch --show-current 2>$null)
+                }
+            }
+        $script:RepoList = @($repos)
+        $repos | ConvertTo-Json | Set-Content -Path (Join-Path $OutDir "repos.json") -Encoding utf8
+        $results["repos.json"] = "ok ($(@($repos).Count) repos)"
+    } catch {
+        $results["repos.json"] = "failed: $($_.Exception.Message)"
+    }
+
+    Set-Content -Path (Join-Path $OutDir "generated.txt") -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding utf8
+    return $results
 }
 
-if ($testMode -and $countLimitReached) {
-    Write-Host "Quick scan complete! Found ~$script:totalDirs directories and ~$script:totalFiles files (test mode limit)" -ForegroundColor Green
-} else {
-    Write-Host "Scan complete! Found $script:totalDirs directories and $script:totalFiles files" -ForegroundColor Green
+# ---------------------------------------------------------------------------
+# Unpushed work (WIP) snapshots
+# ---------------------------------------------------------------------------
+# Repos that have a remote are not mirrored, so uncommitted changes and unpushed
+# commits would be lost with the machine. For each such repo that has either, save:
+#   uncommitted.patch  tracked changes (git apply)
+#   untracked\         untracked, non-ignored files (small ones)
+#   unpushed.bundle    commits not on any remote (git fetch/pull from the bundle)
+#   info.txt           remote, branch and counts
+# Remotes matching backupDev.wip.excludeRemotePatterns are skipped (for example an
+# employer's org, whose code must not be copied to personal storage).
+function Export-WipSnapshots {
+    param([string]$OutDir)
+
+    $wip = Get-BackupSetting $bd "wip" $null
+    if (-not [bool](Get-BackupSetting $wip "enabled" $true)) { return "disabled" }
+    $skipPatterns = @(Get-BackupSetting $wip "excludeRemotePatterns" @())
+    $maxUntrackedBytes = [int64](Get-BackupSetting $wip "maxUntrackedFileMB" 5) * 1MB
+
+    if (Test-Path -LiteralPath $OutDir) { Remove-Item -LiteralPath $OutDir -Recurse -Force }
+
+    $saved = 0
+    $skipped = 0
+    foreach ($repo in @($script:RepoList)) {
+        if (-not $repo.remote) { continue }   # no remote: already mirrored in full
+        if (@($skipPatterns | Where-Object { $_ -and $repo.remote -like "*$_*" }).Count -gt 0) { $skipped++; continue }
+
+        $dir = Join-Path $devRoot $repo.path
+        $dirty = @(git -C $dir status --porcelain 2>$null)
+        $unpushed = @(git -C $dir log --branches --not --remotes --oneline 2>$null)
+        if ($dirty.Count -eq 0 -and $unpushed.Count -eq 0) { continue }
+
+        $target = Join-Path $OutDir ($repo.path -replace '[\\/]', '__')
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+
+        if ($dirty.Count -gt 0) {
+            # --output writes the bytes directly (no PowerShell pipeline re-encoding)
+            git -C $dir diff HEAD --binary --output="$(Join-Path $target 'uncommitted.patch')" 2>$null
+            foreach ($rel in @(git -C $dir ls-files --others --exclude-standard 2>$null)) {
+                $srcFile = Join-Path $dir $rel
+                if ((Test-Path -LiteralPath $srcFile -PathType Leaf) -and (Get-Item -LiteralPath $srcFile).Length -le $maxUntrackedBytes) {
+                    $dst = Join-Path (Join-Path $target "untracked") $rel
+                    New-Item -ItemType Directory -Path (Split-Path $dst -Parent) -Force | Out-Null
+                    Copy-Item -LiteralPath $srcFile -Destination $dst -Force
+                }
+            }
+        }
+        if ($unpushed.Count -gt 0) {
+            git -C $dir bundle create (Join-Path $target "unpushed.bundle") --branches --not --remotes 2>$null | Out-Null
+        }
+        @(
+            "path:      $($repo.path)",
+            "remote:    $($repo.remote)",
+            "branch:    $($repo.branch)",
+            "changed:   $($dirty.Count) file(s) with uncommitted changes",
+            "unpushed:  $($unpushed.Count) commit(s) not on any remote",
+            "captured:  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        ) | Set-Content -Path (Join-Path $target "info.txt") -Encoding utf8
+        $saved++
+    }
+    return "$saved repo(s) with unpushed work saved, $skipped skipped by remote pattern"
 }
 
-# If count-only mode, display summary and exit
-if ($countOnly) {
-    $changedItems = $script:totalDirs + $script:totalFiles
-    $inventoryItems = $script:totalDirsInSource + $script:totalFilesInSource
-    $scriptEndTime = Get-Date
-    $totalRuntime = $scriptEndTime - $scriptStartTime
-    $runtimeFormatted = "{0:mm\:ss}" -f $totalRuntime
+# ---------------------------------------------------------------------------
+# Weekly zip
+# ---------------------------------------------------------------------------
+function Get-ZipDecision {
+    if ($noZip -or -not $zipEnabled) { return "disabled" }
+    if ($forceZip) { return "due" }
+    $latest = Get-ChildItem -Path $weeklyRoot -Filter "dev-*.zip" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($latest -and ((Get-Date) - $latest.LastWriteTime).TotalDays -lt $zipIntervalDays) { return "recent" }
+    return "due"
+}
 
+function New-WeeklyZip {
+    New-Item -ItemType Directory -Path $weeklyRoot -Force | Out-Null
+    $stamp = Get-Date -Format "yyyy-MM-dd"
+    $zipName = "dev-$stamp.zip"
+    # Build in TEMP first so the cloud-sync client never uploads a half-written zip
+    $tmpZip = Join-Path $env:TEMP $zipName
+    Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
+    $zipSources = @($filesRoot, $manifestRoot)
+    if (Test-Path -LiteralPath $wipRoot) { $zipSources += $wipRoot }
+    Compress-Archive -Path $zipSources -DestinationPath $tmpZip -CompressionLevel Optimal
+    Move-Item -Path $tmpZip -Destination (Join-Path $weeklyRoot $zipName) -Force
+
+    # Rotate: keep the newest N zips
+    Get-ChildItem -Path $weeklyRoot -Filter "dev-*.zip" -File | Sort-Object LastWriteTime -Descending |
+        Select-Object -Skip $zipKeep | Remove-Item -Force
+    return $zipName
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+$scriptStart = Get-Date
+$timestamp = $scriptStart.ToString("yyyy-MM-dd HH:mm:ss")
+$mode = if ($countOnly) { "COUNT" } elseif ($dryRun) { "DRY-RUN" } elseif ($manifestsOnly) { "MANIFESTS" } else { "FULL" }
+
+Write-Host ""
+Write-Separator
+Write-Host "  DEV BACKUP - $mode" -ForegroundColor Cyan
+Write-Host "  Destination: $destination" -ForegroundColor Gray
+Write-Separator
+Write-Host ""
+
+# The cloud-drive parent must exist (guards against an unmounted drive creating a stray local folder)
+$destParent = Split-Path $destination -Parent
+if (-not $destParent -or -not (Test-Path $destParent)) {
+    Write-Host "Destination parent not found: $destParent" -ForegroundColor Red
+    Write-Host "Is the cloud drive mounted? Check config.json paths.backupDestination." -ForegroundColor Yellow
+    exit 1
+}
+if (-not $devRoot -or -not (Test-Path $devRoot)) {
+    Write-Host "paths.devRoot is not set or does not exist in config.json: '$devRoot'" -ForegroundColor Red
+    exit 1
+}
+
+# Manifests-only shortcut
+if ($manifestsOnly) {
+    $res = Export-PackageManifests -OutDir $manifestRoot
+    $res.GetEnumerator() | ForEach-Object { Write-Host ("  {0,-24} {1}" -f $_.Key, $_.Value) -ForegroundColor Gray }
     Write-Host ""
-    Write-Separator
-    Write-Host "  COUNT SUMMARY" -ForegroundColor Cyan
-    Write-Separator
-    Write-Host ""
-    Write-Host "                    Inventory    Need to Copy" -ForegroundColor Gray
-    Write-Host "                    ---------    ------------" -ForegroundColor DarkGray
-
-    # Format numbers with right-alignment and commas
-    # Using fixed-width format strings for consistent alignment
-    Write-Host "  " -NoNewline
-    Write-Host ("{0,-14}" -f "Directories:") -NoNewline -ForegroundColor Cyan
-    Write-Host ("{0,13:N0}" -f $script:totalDirsInSource) -NoNewline -ForegroundColor White
-    Write-Host ("{0,12:N0}" -f $script:totalDirs) -ForegroundColor Yellow
-
-    Write-Host "  " -NoNewline
-    Write-Host ("{0,-14}" -f "Files:") -NoNewline -ForegroundColor Cyan
-    Write-Host ("{0,13:N0}" -f $script:totalFilesInSource) -NoNewline -ForegroundColor White
-    Write-Host ("{0,12:N0}" -f $script:totalFiles) -ForegroundColor Yellow
-
-    Write-Host "  " -NoNewline
-    Write-Host ("─" * 41) -ForegroundColor DarkGray
-
-    Write-Host "  " -NoNewline
-    Write-Host ("{0,-14}" -f "Total:") -NoNewline -ForegroundColor Cyan
-    Write-Host ("{0,13:N0}" -f $inventoryItems) -NoNewline -ForegroundColor White
-    Write-Host ("{0,12:N0}" -f $changedItems) -ForegroundColor Yellow
-
-    Write-Host ""
-    Write-Host "  Runtime: $runtimeFormatted" -ForegroundColor Gray
-    Write-Separator
+    Write-Host "Manifests written to: $manifestRoot" -ForegroundColor Green
     exit 0
 }
 
+$items = Get-BackupItems
+if ($null -eq $items) { exit 1 }
+if ($items.Count -eq 0) { Write-Host "Allowlist is empty; nothing to back up." -ForegroundColor Yellow; exit 1 }
+
+# Pass 1: list-only (also the safety check before any /MIR)
+Write-Host "Scanning $($items.Count) allowlisted items..." -ForegroundColor Cyan
+$plan = foreach ($item in $items) { Invoke-ItemMirror -Item $item -ListOnly }
+
 Write-Host ""
+Write-Host ("  {0,-62} {1,7} {2,7} {3,7} {4,9}" -f "Item", "Files", "To copy", "Delete", "MB") -ForegroundColor White
+foreach ($p in $plan) {
+    $label = $p.Name.Replace($devRoot, "%DEV%").Replace($homeDir, "%HOME%")
+    if ($label.Length -gt 62) { $label = "..." + $label.Substring($label.Length - 59) }
+    $color = if ($p.HadError -or $p.EmptySource) { "Red" } elseif ($p.Copied -gt 0 -or $p.Extras -gt 0) { "Yellow" } else { "Gray" }
+    Write-Host ("  {0,-62} {1,7:N0} {2,7:N0} {3,7:N0} {4,9:N1}" -f $label, $p.Total, $p.Copied, $p.Extras, ($p.Bytes / 1MB)) -ForegroundColor $color
+}
+$totFiles = ($plan | Measure-Object Total -Sum).Sum
+$totCopy = ($plan | Measure-Object Copied -Sum).Sum
+$totExtra = ($plan | Measure-Object Extras -Sum).Sum
+$totMB = (($plan | Measure-Object Bytes -Sum).Sum) / 1MB
+Write-Host ("  {0,-62} {1,7:N0} {2,7:N0} {3,7:N0} {4,9:N1}" -f "TOTAL", $totFiles, $totCopy, $totExtra, $totMB) -ForegroundColor Cyan
+Write-Host ""
+
+if ($countOnly) { exit 0 }
+
+$zipDecision = Get-ZipDecision
 if ($dryRun) {
-    Write-Host "Pass 2: Simulating backup with progress tracking (no files will be copied)..." -ForegroundColor Cyan
-} else {
-    Write-Host "Pass 2: Starting backup with progress tracking..." -ForegroundColor Cyan
+    Write-Host "Dry run: nothing was written." -ForegroundColor Cyan
+    Write-Host "  Manifests that would be refreshed: $manifestRoot" -ForegroundColor Gray
+    Write-Host "  Weekly zip: $zipDecision" -ForegroundColor Gray
+    $bad = @($plan | Where-Object { $_.EmptySource -or $_.HadError })
+    if ($bad.Count -gt 0) { Write-Host "  $($bad.Count) item(s) would be skipped or fail (red above)." -ForegroundColor Red }
+    exit 0
 }
 
-# Start robocopy process in background
-$robocopyJob = Start-Job -ScriptBlock {
-    param($src, $dst, $log, $testMode, $mode, $exclusions, $dryRun)
-
-    # Build robocopy command with appropriate flags
-    # /XJ excludes junction points (important for Scoop directories)
-    # Mode is either /MIR (mirror with deletions) or /E (copy without deletions)
-    # /L flag for dry-run (list-only mode - no actual copying)
-    $listOnlyFlag = if ($dryRun) { "/L" } else { "" }
-    $robocopyFlags = "$listOnlyFlag $mode /R:3 /W:5 /LOG+:`"$log`" /NP /NDL /ETA /XJ $exclusions"
-
-    # Execute robocopy with the constructed flags
-    $cmd = "robocopy `"$src`" `"$dst`" $robocopyFlags 2>&1"
-    Invoke-Expression $cmd
-} -ArgumentList $source, $destination, $detailedLog, $testMode, $robocopyMode, $exclusionFlags, $dryRun
-
-$lastProgress = Get-Date
-
-# Monitor job progress by checking log file
-while ($robocopyJob.State -eq 'Running') {
-    Start-Sleep -Milliseconds 200
-
-    # Read current log file content
-    if (Test-Path $detailedLog) {
-        try {
-            $logContent = Get-Content $detailedLog -ErrorAction SilentlyContinue
-
-            # Count different types of operations
-            $newDirs = ($logContent | Where-Object { $_ -match 'New Dir' }).Count
-            $extraDirs = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
-            $script:dirCount = $newDirs + $extraDirs
-
-            $newFiles = ($logContent | Where-Object { $_ -match 'New File' }).Count
-            $newerFiles = ($logContent | Where-Object { $_ -match 'Newer' }).Count
-            $extraFiles = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
-            $script:copiedCount = $newFiles + $newerFiles
-            $script:extraCount = $extraFiles
-            $script:fileCount = $script:copiedCount + $script:extraCount
-
-            # In test mode, stop after reaching the limit (dirs + files)
-            if ($testMode -and (($script:dirCount + $script:fileCount) -ge $testModeLimit)) {
-                Stop-Job $robocopyJob
-                break
-            }
-
-            # Update progress every 500ms
-            $now = Get-Date
-            if (($now - $lastProgress).TotalMilliseconds -ge 500) {
-                Show-Progress -Dirs $script:dirCount -Files $script:fileCount -Copied $script:copiedCount -Extra $script:extraCount -TotalFiles $script:totalFiles -TotalDirs $script:totalDirs
-                $lastProgress = $now
-            }
-        }
-        catch {
-            # File might be locked, skip this iteration
-        }
+# Pass 2: real mirror
+New-Item -ItemType Directory -Path $destination -Force | Out-Null
+Set-Content -Path $detailedLog -Value "=== Backup started: $timestamp | Mode: $mode ==="
+Write-Host "Mirroring..." -ForegroundColor Cyan
+$failures = 0
+$skipped = 0
+$copied = 0
+$removed = 0
+for ($i = 0; $i -lt $items.Count; $i++) {
+    if ($plan[$i].EmptySource) {
+        Write-Host "  SKIPPED (source empty, destination not): $($items[$i].Source)" -ForegroundColor Red
+        $skipped++
+        continue
+    }
+    $r = Invoke-ItemMirror -Item $items[$i]
+    $copied += $r.Copied
+    $removed += $r.Extras
+    if ($r.HadError -or $r.Failed -gt 0) {
+        $failures++
+        Write-Host "  FAILED (robocopy exit $($r.ExitCode)): $($items[$i].Source)" -ForegroundColor Red
     }
 }
+Write-Host "  Files copied: $copied | Removed from mirror: $removed | Failed items: $failures | Skipped: $skipped" -ForegroundColor Green
 
-# Wait for job to complete
-$null = Receive-Job $robocopyJob -Wait -AutoRemoveJob
+Write-Host ""
+Write-Host "Writing package manifests..." -ForegroundColor Cyan
+$manifestResults = Export-PackageManifests -OutDir $manifestRoot
+$manifestResults.GetEnumerator() | ForEach-Object { Write-Host ("  {0,-24} {1}" -f $_.Key, $_.Value) -ForegroundColor Gray }
 
-# Parse log one final time to get complete counts
-if (Test-Path $detailedLog) {
-    try {
-        $logContent = Get-Content $detailedLog -ErrorAction SilentlyContinue
+Write-Host ""
+Write-Host "Capturing unpushed work..." -ForegroundColor Cyan
+$wipResult = Export-WipSnapshots -OutDir $wipRoot
+Write-Host "  $wipResult" -ForegroundColor Gray
 
-        # Count different types of operations
-        $newDirs = ($logContent | Where-Object { $_ -match 'New Dir' }).Count
-        $extraDirs = ($logContent | Where-Object { $_ -match '\*EXTRA Dir' }).Count
-        $script:dirCount = $newDirs + $extraDirs
-
-        $newFiles = ($logContent | Where-Object { $_ -match 'New File' }).Count
-        $newerFiles = ($logContent | Where-Object { $_ -match 'Newer' }).Count
-        $extraFiles = ($logContent | Where-Object { $_ -match '\*EXTRA File' }).Count
-        $script:copiedCount = $newFiles + $newerFiles
-        $script:extraCount = $extraFiles
-        $script:fileCount = $script:copiedCount + $script:extraCount
-    }
-    catch { }
+# Keep a copy of the restore playbook next to the data: on a rebuilt machine the
+# repo is not cloned yet, so the instructions must travel with the backup.
+$restoreDir = Join-Path $destination "restore"
+New-Item -ItemType Directory -Path $restoreDir -Force | Out-Null
+foreach ($name in "restore-dev.md", "restore-dev.ps1") {
+    $src = Join-Path $scriptDir $name
+    if (Test-Path $src) { Copy-Item -Path $src -Destination $restoreDir -Force }
 }
 
-# Final progress update - clear line and show final state
-if ($script:fileCount -gt 0 -or $script:dirCount -gt 0) {
-    # Only show progress if there were operations
-    Write-Host "`r                                                                                                    " -NoNewline
-    Write-Host "`r" -NoNewline
-    Show-Progress -Dirs $script:dirCount -Files $script:fileCount -Copied $script:copiedCount -Extra $script:extraCount -TotalFiles $script:totalFiles -TotalDirs $script:totalDirs -Force
+$zipResult = "not due ($zipDecision)"
+if ($zipDecision -eq "due") {
     Write-Host ""
+    Write-Host "Creating weekly zip..." -ForegroundColor Cyan
+    try {
+        $zipResult = New-WeeklyZip
+        Write-Host "  $zipResult" -ForegroundColor Green
+    } catch {
+        $zipResult = "failed: $($_.Exception.Message)"
+        Write-Host "  Zip failed: $($_.Exception.Message)" -ForegroundColor Red
+        $failures++
+    }
 }
 
-# Show completion message
-Write-Host ""
-if ($testMode) {
-    Write-Host "Test mode limit reached ($testModeLimit operations). Stopping backup..." -ForegroundColor Yellow
-}
-if ($dryRun) {
-    Write-Host "Dry-run complete! No files were actually copied." -ForegroundColor Cyan
-    Write-Host "This was a simulation of what would happen during a real backup." -ForegroundColor Cyan
-} else {
-    Write-Host "Backup complete!" -ForegroundColor Green
-}
-Write-Host ""
-
+# History log (newest first, last 10 kept; header format is parsed by console.ps1)
 $endTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 Add-Content -Path $detailedLog -Value "`n=== Backup completed: $endTime ==="
+$entry = "=== Backup: $timestamp | Mode: $mode ===`n" +
+         "Items: $($items.Count) | Copied: $copied | Removed: $removed | Failed: $failures | Skipped: $skipped | WIP: $wipResult | Zip: $zipResult`n" +
+         "=== Backup completed: $endTime ==="
+$existing = if (Test-Path $summaryLog) { Get-Content $summaryLog -Raw } else { "" }
+$entries = @($entry) + @(($existing -split '(?:\r?\n){2,}') | Where-Object { $_.Trim() -ne "" })
+Set-Content -Path $summaryLog -Value (($entries | Select-Object -First 10) -join "`n`n")
 
-# Extract summary from detailed log and append to history
-$detailedContent = Get-Content $detailedLog -Raw
-
-# Extract only the summary statistics table (not the file listing)
-# Match from the dashed line before "Total" to "Ended :" line
-$summarySection = ""
-if ($detailedContent -match '(?s)([-]+\r?\n\s+Total\s+Copied\s+Skipped.*?Ended\s*:.*?)(\r?\n|$)') {
-    $summarySection = $matches[1].Trim()
-}
-
-# Prepend to summary history (newest at top, include mode in header)
-# Build new entry
-$newEntry = "=== Backup: $timestamp | Mode: $backupMode ===`n"
-if ($summarySection) {
-    $newEntry += "$summarySection`n"
-}
-$newEntry += "=== Backup completed: $endTime ==="
-
-# Read existing content
-$existingContent = ""
-if (Test-Path $summaryLog) {
-    $existingContent = Get-Content $summaryLog -Raw
-}
-
-# Prepend new entry to existing content
-if ($existingContent) {
-    $updatedContent = $newEntry + "`n`n" + $existingContent
-} else {
-    $updatedContent = $newEntry
-}
-
-# Write updated content
-Set-Content -Path $summaryLog -Value $updatedContent
-
-# Rotate summary log: keep only last 10 backups (newest first)
-$summaryContent = Get-Content $summaryLog -Raw
-$backupSessions = $summaryContent -split '(?m)^=== Backup: ' | Where-Object { $_.Trim() -ne "" }
-
-$logRotated = $false
-if ($backupSessions.Count -gt 10) {
-    # Keep only the first 10 sessions (newest are at the top)
-    $recentSessions = $backupSessions | Select-Object -First 10
-    $rotatedContent = ($recentSessions | ForEach-Object { "=== Backup: $_" }) -join "`n"
-    Set-Content -Path $summaryLog -Value $rotatedContent
-    $logRotated = $true
-}
-
-Write-Host "  Detailed log: $detailedLog" -ForegroundColor Cyan
-Write-Host "  Summary history: $summaryLog" -ForegroundColor Cyan
-if ($logRotated) {
-    Write-Host "    (Rotated summary log to keep last 10 backups)" -ForegroundColor Cyan
-}
-
-# Display total runtime
-$scriptEndTime = Get-Date
-$totalRuntime = $scriptEndTime - $scriptStartTime
-$runtimeFormatted = "{0:mm\:ss}" -f $totalRuntime
 Write-Host ""
-Write-Host "  Total runtime: $runtimeFormatted" -ForegroundColor Cyan
-
-# Exit with success code
+if (-not (Get-Process GoogleDriveFS -ErrorAction SilentlyContinue)) {
+    Write-Host "Note: the Google Drive app is not running, so nothing is uploading yet." -ForegroundColor Yellow
+} else {
+    Write-Host "Local copy complete. The Drive app uploads in the background; the backup is off-site once it reports 'synced'." -ForegroundColor Gray
+}
+if ($failures -gt 0 -or $skipped -gt 0) {
+    Write-Host "Completed with problems; see $detailedLog" -ForegroundColor Red
+    exit 2
+}
+Write-Host "Backup complete in $(((Get-Date) - $scriptStart).ToString('mm\:ss'))." -ForegroundColor Green
 exit 0

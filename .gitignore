@@ -30,9 +30,9 @@ logs/
 backup-log.txt
 temp_count_log.txt
 
-# Backup module temporary files
-modules/backup-dev/backup-scan-result.json
-modules/backup-dev/backup-delete-result.json
+# Backup module: local allowlist names personal folders, keep it out of the repo
+# (backup-includes.example.txt is the tracked template)
+modules/backup-dev/backup-includes.txt
 
 # Windows system files
 Thumbs.db

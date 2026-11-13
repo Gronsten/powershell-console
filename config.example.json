@@ -5,8 +5,7 @@
     "oktaYamlPath": "C:\\Users\\YourUsername\\.okta\\okta.yaml",
     "rdcManagerPath": "C:\\path\\to\\RDCMan.exe",
     "linksPath": "C:\\Users\\YourUsername\\Favorites\\Links\\",
-    "backupSource": "C:\\AppInstall\\",
-    "backupDestination": "OneDrive - Company Name\\DevBackups",
+    "backupDestination": "C:\\path\\to\\cloud-drive\\DevBackup",
     "devRoot": "C:\\path\\to\\dev",
     "vpnOutputPath": "C:\\path\\to\\vpn_output"
   },
@@ -251,66 +250,48 @@
     }
   },
   "backupDev": {
-    "exclusions": {
-      "directories": [
-        "node_modules",
-        ".git",
-        "bin",
-        "obj",
-        ".vscode",
-        ".idea",
-        ".vs",
-        "_prod",
-        "dist",
-        "build",
-        ".next",
-        "__pycache__",
-        ".pytest_cache",
-        "coverage",
-        ".nyc_output",
-        "target",
-        "out",
-        ".gradle",
-        ".terraform",
-        "vendor"
-      ],
-      "files": [
-        "*.log",
-        "*.tmp",
-        "*.temp",
-        "*.bak",
-        "*.swp",
-        "*.swo",
-        ".DS_Store",
-        "Thumbs.db",
-        "desktop.ini",
-        "*.vsix",
-        "*.iso",
-        "*.vhd",
-        "*.vhdx",
-        "*.vmdk",
-        "*.avhdx",
-        "*.cache",
-        "*.pyc",
-        "*.pyo",
-        "*.class",
-        "*.jar",
-        "*.war",
-        "*.ear",
-        "backup-scan-result.json",
-        "backup-delete-result.json"
-      ]
+    "includesFile": "backup-includes.txt",
+    "weeklyZip": {
+      "enabled": true,
+      "intervalDays": 7,
+      "keep": 8
     },
-    "mirrorMode": false,
+    "wip": {
+      "enabled": true,
+      "maxUntrackedFileMB": 5,
+      "excludeRemotePatterns": ["github.com/your-employer-org/"]
+    },
+    "excludeDirectories": [
+      "node_modules",
+      ".terraform",
+      ".venv",
+      "venv",
+      "__pycache__",
+      ".pytest_cache"
+    ],
+    "excludeFiles": [
+      "*.vhd",
+      "*.vhdx",
+      "*.vsix",
+      "*.pyc",
+      "*.pyo",
+      "*.db.lock",
+      "S.gpg-agent*",
+      "S.dirmngr",
+      "S.keyboxd",
+      "S.scdaemon",
+      "gnupg_spawn_agent_sentinel*"
+    ],
     "_comments": {
-      "exclusions.directories": "Directory names to exclude anywhere in the tree (e.g., 'node_modules', '.git')",
-      "exclusions.files": "File patterns to exclude (supports wildcards like '*.log', '*.tmp')",
-      "mirrorMode": "WARNING: When true, uses /MIR flag which DELETES files in destination that don't exist in source. When false, uses /E (safer, keeps old files)",
-      "safety": "Mirror mode is disabled by default for safety. Only enable if you understand the risks.",
-      "management": "All exclusions are fully editable via the 'Manage Exclusions' menu option"
+      "includesFile": "Allowlist of paths to back up (module-relative). Copy backup-includes.example.txt to backup-includes.txt (gitignored) and edit",
+      "weeklyZip": "Dated zip of the mirror + manifests for recovering deleted items. intervalDays = minimum days between zips, keep = zips retained",
+      "wip": "Saves uncommitted changes (patch) and unpushed commits (bundle) for repos that have a remote. excludeRemotePatterns: remote URL fragments to skip (e.g. an employer org whose code must not leave corporate storage)",
+      "excludeDirectories": "Directory names skipped inside every mirrored folder",
+      "excludeFiles": "File patterns skipped inside every mirrored folder (wildcards allowed)",
+      "paths.backupDestination": "Absolute path (e.g. a cloud-drive folder) or a path relative to the user profile",
+      "mirror": "Folders are mirrored with robocopy /MIR; deletions propagate, so use the weekly zips to recover"
     }
-  },
-  "packageManager": {
+  },  "packageManager": {
     "lastSearchScope": "installed",
     "blockedUpdatesSectionExpanded": false,
     "wingetUnelevatedUpgradeIds": [
@@ -318,5 +299,5 @@
     ],
     "wingetUnelevatedShell": "pwsh"
   },
-  "configVersion": "config.21"
+  "configVersion": "config.22"
 }
