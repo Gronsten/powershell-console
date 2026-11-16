@@ -125,6 +125,50 @@
       {
         "text": "Package Manager",
         "action": "\r\n            Show-PackageManagerMenu\r\n        "
+      },
+      {
+        "text": "Exec Admin",
+        "action": "\r\n            Show-ExecAdminMenu\r\n        "
+      }
+    ],
+    "Exec Admin": [
+      {
+        "text": "Run full daily pipeline (capture + Claude)",
+        "action": "\r\n            Start-ExecAdminCapture -InvokeClaude\r\n        "
+      },
+      {
+        "text": "Capture only (no Claude) — troubleshoot",
+        "action": "\r\n            Start-ExecAdminCapture\r\n        "
+      },
+      {
+        "text": "More options…",
+        "action": "\r\n            Show-ExecAdminMoreMenu\r\n        "
+      }
+    ],
+    "Exec Admin More": [
+      {
+        "text": "Weekly capture (+ Teams catalog rediscover)",
+        "action": "\r\n            Start-ExecAdminCapture -TeamsRediscover\r\n        "
+      },
+      {
+        "text": "Weekly full pipeline (+ rediscover + Claude)",
+        "action": "\r\n            Start-ExecAdminCapture -TeamsRediscover -InvokeClaude\r\n        "
+      },
+      {
+        "text": "Claude Teams only (Prompt G)",
+        "action": "\r\n            Start-ExecAdminCapture -ClaudeTeams\r\n        "
+      },
+      {
+        "text": "Claude transcripts only",
+        "action": "\r\n            Start-ExecAdminCapture -ClaudeTranscripts\r\n        "
+      },
+      {
+        "text": "Capture only (skip Fireflies)",
+        "action": "\r\n            Start-ExecAdminCapture -SkipFireflies\r\n        "
+      },
+      {
+        "text": "Pipeline health only (dry run)",
+        "action": "\r\n            Start-ExecAdminCapture -DryRun\r\n        "
       }
     ],
     "Package Manager": [
@@ -249,6 +293,17 @@
       "excludeAll": "Exclude entire project from counts"
     }
   },
+  "_execAdminMergeSnippet": {
+    "_comment": "Optional: merge menus.Exec Admin and menus.Exec Admin More from this file — requires paths.devRoot -> exec-admin parent (e.g. C:\\AppInstall\\dev) and console.ps1 with Show-ExecAdminMenu / Show-ExecAdminMoreMenu. Primary item: Run full daily pipeline (-InvokeClaude); variants live under More options.",
+    "mainMenuItem": {
+      "text": "Exec Admin",
+      "action": "\r\n            Show-ExecAdminMenu\r\n        "
+    },
+    "submenuNames": [
+      "Exec Admin",
+      "Exec Admin More"
+    ]
+  },
   "backupDev": {
     "includesFile": "backup-includes.txt",
     "weeklyZip": {
@@ -299,5 +354,5 @@
     ],
     "wingetUnelevatedShell": "pwsh"
   },
-  "configVersion": "config.22"
+  "configVersion": "config.23"
 }

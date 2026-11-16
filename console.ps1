@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.23.0"
+$script:ConsoleVersion = "1.24.0"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -6121,6 +6121,130 @@ function Open-BackupHistoryLog {
     Invoke-StandardPause
 }
 
+function Start-ExecAdminCapture {
+    [CmdletBinding()]
+    param(
+        [switch]$DryRun,
+        [switch]$TeamsRediscover,
+        [switch]$SkipFireflies,
+        [switch]$ContinueOnError,
+        [switch]$InvokeClaude,
+        [switch]$ClaudeTeams,
+        [switch]$ClaudeTranscripts
+    )
+
+    if ($script:Config.paths.devRoot) {
+        $devRoot = $script:Config.paths.devRoot
+    }
+    else {
+        $devRoot = Split-Path $PSScriptRoot -Parent
+    }
+
+    $repo = Join-Path $devRoot 'exec-admin'
+    $captureScript = Join-Path $repo 'Invoke-ExecAdminDailyCapture.ps1'
+
+    if (-not (Test-Path -LiteralPath $captureScript)) {
+        Write-Host "exec-admin capture script not found: $captureScript" -ForegroundColor Red
+        Write-Host "Expected repo at: $repo" -ForegroundColor Yellow
+        Invoke-StandardPause
+        return
+    }
+
+    $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+    if (-not $pwshPath) {
+        Write-Host 'pwsh (PowerShell 7) is required for exec-admin capture.' -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+
+    $argList = @('-NoProfile', '-File', $captureScript, '-Root', $repo)
+    if ($DryRun) { $argList += '-DryRun' }
+    if ($TeamsRediscover) { $argList += '-TeamsRediscover' }
+    if ($SkipFireflies) { $argList += '-SkipFireflies' }
+    if ($ContinueOnError) { $argList += '-ContinueOnError' }
+    if ($InvokeClaude) { $argList += '-InvokeClaude' }
+    if ($ClaudeTeams) { $argList += '-ClaudeTeams' }
+    if ($ClaudeTranscripts) { $argList += '-ClaudeTranscripts' }
+
+    Write-Host 'exec-admin — terminal capture (see repo Invoke-ExecAdminDailyCapture.ps1)' -ForegroundColor Cyan
+    Write-Host "Running: pwsh $($argList -join ' ')" -ForegroundColor DarkGray
+    Write-Host ''
+
+    Push-Location $repo
+    try {
+        & $pwshPath @argList
+    }
+    finally {
+        Pop-Location
+    }
+
+    Invoke-StandardPause
+}
+
+function Show-ExecAdminMoreMenu {
+    $defaultMenu = @(
+        (New-MenuAction 'Weekly capture (+ Teams catalog rediscover)' {
+            Start-ExecAdminCapture -TeamsRediscover
+        }),
+        (New-MenuAction 'Weekly full pipeline (+ rediscover + Claude)' {
+            Start-ExecAdminCapture -TeamsRediscover -InvokeClaude
+        }),
+        (New-MenuAction 'Claude Teams only (Prompt G)' {
+            Start-ExecAdminCapture -ClaudeTeams
+        }),
+        (New-MenuAction 'Claude transcripts only' {
+            Start-ExecAdminCapture -ClaudeTranscripts
+        }),
+        (New-MenuAction 'Capture only (skip Fireflies)' {
+            Start-ExecAdminCapture -SkipFireflies
+        }),
+        (New-MenuAction 'Pipeline health only (dry run)' {
+            Start-ExecAdminCapture -DryRun
+        })
+    )
+
+    $menuItems = Get-MenuFromConfig -MenuTitle 'Exec Admin More' -DefaultMenuItems $defaultMenu
+
+    do {
+        $choice = Show-ArrowMenu -MenuItems $menuItems -Title 'Exec Admin — More options'
+
+        if ($choice -eq -1) {
+            return
+        }
+
+        $selectedAction = $menuItems[$choice]
+        & $selectedAction.Action
+    } while ($true)
+}
+
+function Show-ExecAdminMenu {
+    $defaultMenu = @(
+        (New-MenuAction 'Run full daily pipeline (capture + Claude)' {
+            Start-ExecAdminCapture -InvokeClaude
+        }),
+        (New-MenuAction 'Capture only (no Claude) — troubleshoot' {
+            Start-ExecAdminCapture
+        }),
+        (New-MenuAction 'More options…' {
+            Show-ExecAdminMoreMenu
+        })
+    )
+
+    $menuItems = Get-MenuFromConfig -MenuTitle 'Exec Admin' -DefaultMenuItems $defaultMenu
+
+    do {
+        $choice = Show-ArrowMenu -MenuItems $menuItems -Title 'Exec Admin'
+
+        if ($choice -eq -1) {
+            Write-Host 'Returning to Main Menu...' -ForegroundColor Cyan
+            return
+        }
+
+        $selectedAction = $menuItems[$choice]
+        & $selectedAction.Action
+    } while ($true)
+}
+
 function Show-BackupDevMenu {
     # Define backup submenu
     $defaultMenu = @(
@@ -6219,6 +6343,9 @@ function Show-MainMenu {
         }),
         (New-MenuAction "Backup Dev Environment" {
             Show-BackupDevMenu
+        }),
+        (New-MenuAction "Exec Admin" {
+            Show-ExecAdminMenu
         }),
         (New-MenuAction "Package Manager" {
             Show-PackageManagerMenu
