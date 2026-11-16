@@ -4,6 +4,25 @@ Utility scripts for PowerShell console operations.
 
 ## Available Scripts
 
+### Publish-ConfigExample.ps1
+
+Publishes git-tracked `config.example.json` from gitignored `config.json` before a release commit.
+Sanitization rules live in `config-publish.manifest.json`. Fails if employer paths, real AWS
+account ids, or other forbidden patterns would leak into the example file.
+
+```powershell
+# From _dev/
+pwsh -NoProfile -File .\scripts\Publish-ConfigExample.ps1
+pwsh -NoProfile -File .\scripts\Publish-ConfigExample.ps1 -WhatIf
+```
+
+**Related:** `Prepare-ConsoleRelease.ps1` (publish + release checklist text).
+
+### Prepare-ConsoleRelease.ps1
+
+Runs `Publish-ConfigExample.ps1` and prints the version bump / CHANGELOG / PR reminders from
+[ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ### AwsCredentialProfile.ps1
 
 Shared helpers (dot-sourced by `console.ps1`) that copy a named okta-aws-cli profile onto `[default]` so AWS CLI and OpenTofu work without `--profile`.

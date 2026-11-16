@@ -31,6 +31,9 @@ All notable changes to this project have been documented during development.
 - **Exec Admin menu** — Run the exec-admin daily capture pipeline (with or
   without Claude Teams/transcripts) from the main menu; additional variants
   under Exec Admin More.
+- **Config publish** — `scripts/Publish-ConfigExample.ps1` and
+  `Prepare-ConsoleRelease.ps1` publish sanitized `config.example.json` from
+  `config.json` via `config-publish.manifest.json`.
 
 ### v1.23.0 (2026-11-12)
 

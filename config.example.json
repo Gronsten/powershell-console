@@ -1,13 +1,13 @@
 {
   "paths": {
-    "workingDirectory": "C:\\path\\to\\powershell-console",
+    "vpnOutputPath": "C:\\path\\to\\vpn_output",
     "profilePath": "C:\\Users\\YourUsername\\Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1",
+    "devRoot": "C:\\path\\to\\dev",
     "oktaYamlPath": "C:\\Users\\YourUsername\\.okta\\okta.yaml",
+    "workingDirectory": "C:\\path\\to\\powershell-console",
     "rdcManagerPath": "C:\\path\\to\\RDCMan.exe",
     "linksPath": "C:\\Users\\YourUsername\\Favorites\\Links\\",
-    "backupDestination": "C:\\path\\to\\cloud-drive\\DevBackup",
-    "devRoot": "C:\\path\\to\\dev",
-    "vpnOutputPath": "C:\\path\\to\\vpn_output"
+    "backupDestination": "C:\\path\\to\\cloud-drive\\DevBackup"
   },
   "defaultConnection": {
     "instance": "",
@@ -67,12 +67,6 @@
       "highlightChar": "I",
       "function": "Show-InstanceManagementMenu"
     },
-    "alohaBox": {
-      "text": "Aloha to ETS-NETTOOLS Box",
-      "highlightPos": 0,
-      "highlightChar": "A",
-      "function": "Show-AlohaBoxMenu"
-    },
     "vpnConnections": {
       "text": "Get VPN Connections",
       "highlightPos": 0,
@@ -80,27 +74,29 @@
       "function": "Get-VpnConnections"
     }
   },
-  "standardActions": [
-    {
-      "text": "Change AWS Account",
-      "highlightPos": 7,
-      "highlightChar": "C",
-      "function": "Show-AwsAccountMenu"
-    }
-  ],
+  "standardActions": {
+    "text": "Change AWS Account",
+    "highlightPos": 7,
+    "highlightChar": "C",
+    "function": "Show-AwsAccountMenu"
+  },
   "menus": {
     "Main Menu": [
       {
-        "text": "Ping Google",
-        "action": "\r\n            Start-InteractivePing -Target \"google.com\"\r\n            Invoke-StandardPause\r\n        "
-      },
-      {
-        "text": "IP Config",
-        "action": "\r\n            Show-NetworkConfiguration\r\n            Invoke-StandardPause\r\n        "
+        "text": "Package Manager",
+        "action": "\r\n            Show-PackageManagerMenu\r\n        "
       },
       {
         "text": "AWS Login",
         "action": "\r\n            Start-AwsWorkflow\r\n        "
+      },
+      {
+        "text": "Ping Google",
+        "action": "\r\n            Start-InteractivePing -Target \"google.com\"\r\n            pause\r\n        "
+      },
+      {
+        "text": "IP Config",
+        "action": "\r\n            Show-NetworkConfiguration\r\n            pause\r\n        "
       },
       {
         "text": "Edit Configs",
@@ -108,7 +104,7 @@
       },
       {
         "text": "Whitelist Links Folder",
-        "action": "\r\n            Invoke-Expression \"icacls '$($script:Config.paths.linksPath)' /t /setintegritylevel m\"\r\n            Invoke-StandardPause\r\n        "
+        "action": "\r\n            Invoke-Expression \"icacls '$($script:Config.paths.linksPath)' /t /setintegritylevel m\"\r\n            pause\r\n        "
       },
       {
         "text": "Excel Tools",
@@ -120,11 +116,7 @@
       },
       {
         "text": "Backup Dev Environment",
-        "action": "\r\n            Start-BackupDevEnvironment\r\n        "
-      },
-      {
-        "text": "Package Manager",
-        "action": "\r\n            Show-PackageManagerMenu\r\n        "
+        "action": "\r\n            Show-BackupDevMenu\r\n        "
       },
       {
         "text": "Exec Admin",
@@ -174,25 +166,25 @@
     "Package Manager": [
       {
         "text": "Manage Updates",
-        "action": "\r\n            Select-PackagesToUpdate\r\n            Invoke-StandardPause\r\n        "
-      },
-      {
-        "text": "List Installed Packages",
-        "action": "\r\n            Get-InstalledPackages\r\n            Invoke-StandardPause\r\n        "
+        "action": "\r\n            Select-PackagesToUpdate\r\n            pause\r\n        "
       },
       {
         "text": "Search Packages",
-        "action": "\r\n            Search-Packages\r\n            Invoke-StandardPause\r\n        "
+        "action": "\r\n            Search-Packages\r\n            pause\r\n        "
+      },
+      {
+        "text": "List Installed Packages",
+        "action": "\r\n            Get-InstalledPackages\r\n            pause\r\n        "
       }
     ],
     "Instance Management": [
       {
-        "text": "View Current Instance Settings",
-        "action": " Show-CurrentInstanceSettings "
+        "text": "Aloha Remote Access",
+        "action": " Start-AlohaRemoteAccess "
       },
       {
-        "text": "List Running Instances",
-        "action": " Get-RunningInstances "
+        "text": "View Current Instance Settings",
+        "action": " Show-CurrentInstanceSettings "
       },
       {
         "text": "Set Default Instance ID",
@@ -203,8 +195,8 @@
         "action": " Set-DefaultRemoteHostInfo "
       },
       {
-        "text": "Aloha Remote Access",
-        "action": " Start-AlohaRemoteAccess "
+        "text": "List Running Instances",
+        "action": " Get-RunningInstances "
       },
       {
         "text": "Test Instance Connectivity",
@@ -214,23 +206,9 @@
         "text": "Get VPN Connections",
         "action": " Get-VpnConnections "
       }
-    ],
-    "Edit Configs": [
-      {
-        "text": "PowerShell Profile",
-        "action": "\r\n            Open-ConfigInEditor -Path $script:Config.paths.profilePath\r\n            Invoke-StandardPause\r\n        "
-      },
-      {
-        "text": "Okta YAML",
-        "action": "\r\n            Open-ConfigInEditor -Path $script:Config.paths.oktaYamlPath\r\n            Invoke-StandardPause\r\n        "
-      },
-      {
-        "text": "VS Code Settings",
-        "action": "\r\n            $vscodeSettingsPath = \"C:\\path\\to\\vscode\\User\\settings.json\"\r\n            if (Test-Path $vscodeSettingsPath) { Open-ConfigInEditor -Path $vscodeSettingsPath } else { Write-Host 'VS Code settings not found' -ForegroundColor Yellow }\r\n            Invoke-StandardPause\r\n        "
-      }
     ]
   },
-  "awsAccountMenuOrder": [],
+  "awsAccountMenuOrder": null,
   "awsPromptIndicator": {
     "autoInferTerraformPaths": true,
     "directoryMappings": {
@@ -261,26 +239,47 @@
       "pathPatterns": [
         "backup",
         "log",
-        "npm-packages.json"
+        "npm-packages.json",
+        "pycache",
+        "_prod"
       ]
     },
     "projectExclusions": {
       "my-project": {
-        "files": ["package-lock.json", "yarn.lock"],
-        "pathPatterns": ["backup", "archive"]
+        "files": [
+          "package-lock.json",
+          "yarn.lock"
+        ],
+        "pathPatterns": [
+          "backup",
+          "archive"
+        ]
       },
       "legacy-app": {
-        "includeOnly": ["main.py", "config.py"]
+        "includeOnly": [
+          "main.py",
+          "config.py"
+        ]
       },
       "old-project": {
         "excludeAll": true
       },
       "api-project": {
-        "pathPatterns": ["backups", "logs", "config"]
+        "pathPatterns": [
+          "backups",
+          "logs",
+          "config"
+        ]
       },
       "data-project": {
-        "extensions": [".csv", ".xlsx"],
-        "filePatterns": ["temp_*", "cache_*"]
+        "extensions": [
+          ".csv",
+          ".xlsx"
+        ],
+        "filePatterns": [
+          "temp_*",
+          "cache_*"
+        ]
       }
     },
     "_comments": {
@@ -314,7 +313,9 @@
     "wip": {
       "enabled": true,
       "maxUntrackedFileMB": 5,
-      "excludeRemotePatterns": ["github.com/your-employer-org/"]
+      "excludeRemotePatterns": [
+        "github.com/your-employer-org/"
+      ]
     },
     "excludeDirectories": [
       "node_modules",
@@ -348,8 +349,8 @@
     }
   },
   "packageManager": {
-    "lastSearchScope": "installed",
-    "blockedUpdatesSectionExpanded": false,
+    "lastSearchScope": "global",
+    "blockedUpdatesSectionExpanded": true,
     "wingetUnelevatedUpgradeIds": [
       "spacelift-io.spacectl"
     ],

@@ -1,0 +1,74 @@
+{
+  "_comment": "Rules for Publish-ConfigExample.ps1 — edit path placeholders when adding new paths.* keys.",
+  "copyFromDevTopLevel": [
+    "configVersion",
+    "menus",
+    "actionDefinitions",
+    "standardActions",
+    "backupDev",
+    "packageManager",
+    "aws"
+  ],
+  "preserveFromExampleTopLevel": [
+    "environments",
+    "awsAccountMenuOrder",
+    "_execAdminMergeSnippet",
+    "lineCounter"
+  ],
+  "pathPlaceholders": {
+    "workingDirectory": "C:\\path\\to\\powershell-console",
+    "profilePath": "C:\\Users\\YourUsername\\Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1",
+    "oktaYamlPath": "C:\\Users\\YourUsername\\.okta\\okta.yaml",
+    "rdcManagerPath": "C:\\path\\to\\RDCMan.exe",
+    "linksPath": "C:\\Users\\YourUsername\\Favorites\\Links\\",
+    "backupDestination": "C:\\path\\to\\cloud-drive\\DevBackup",
+    "devRoot": "C:\\path\\to\\dev",
+    "vpnOutputPath": "C:\\path\\to\\vpn_output"
+  },
+  "deprecatedPathKeys": [
+    "backupSource"
+  ],
+  "awsPromptIndicatorDirectoryMappings": {
+    "C:\\path\\to\\project1": "123456789012",
+    "C:\\path\\to\\project2": "987654321098"
+  },
+  "wipExcludeRemotePatternsExample": [
+    "github.com/your-employer-org/"
+  ],
+  "defaultConnectionBlankFields": [
+    "instance",
+    "remoteIP"
+  ],
+  "lineCounterCopyGlobalExclusionsFromDev": true,
+  "allowedAwsAccountIdsInOutput": [
+    "123456789012",
+    "987654321098"
+  ],
+  "stringSanitizePatterns": [
+    {
+      "pattern": "(?i)C:\\\\AppInstall\\\\[^\"\\\\]+",
+      "replacement": "C:\\\\path\\\\to\\\\"
+    },
+    {
+      "pattern": "(?i)C:\\\\Users\\\\[^\\\\\"]+",
+      "replacement": "C:\\\\Users\\\\YourUsername"
+    },
+    {
+      "pattern": "(?i)OneDrive[^\"\\\\]*",
+      "replacement": "Documents"
+    },
+    {
+      "pattern": "(?i)github\\.com/(cfacorp|cfaintl)/",
+      "replacement": "github.com/your-employer-org/"
+    },
+    {
+      "pattern": "(?i)[a-z0-9._%+-]+@cfacorp\\.com",
+      "replacement": "user@example.com"
+    }
+  ],
+  "forbiddenPatterns": [
+    "(?i)\\bcfaintl\\b",
+    "(?i)chick-fil",
+    "(?i)mark\\.campbell"
+  ]
+}
