@@ -20,6 +20,21 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.24.0 (2026-11-16)
+
+**Config Changes Required** (`config.22` to `config.23`):
+- Optional: merge `menus.Exec Admin` and `menus.Exec Admin More` from
+  `config.example.json` (see `_execAdminMergeSnippet`). Requires
+  `paths.devRoot` pointing at the parent of `exec-admin`.
+
+**New Features:**
+- **Exec Admin menu** — Run the exec-admin daily capture pipeline (with or
+  without Claude Teams/transcripts) from the main menu; additional variants
+  under Exec Admin More.
+- **Config publish** — `scripts/Publish-ConfigExample.ps1` and
+  `Prepare-ConsoleRelease.ps1` publish sanitized `config.example.json` from
+  `config.json` via `config-publish.manifest.json`.
+
 ### v1.23.0 (2026-11-12)
 
 **Config Changes Required** (`config.21` to `config.22`):

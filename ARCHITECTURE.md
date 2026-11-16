@@ -185,16 +185,41 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
 
 **Two Configuration Files:**
 
-1. **config.example.json** (Git-tracked)
-   - Template with placeholder values
-   - Defines schema structure
-   - Updated with new features in development
+1. **config.json** (Git-ignored) — **DEV working copy**
+   - Where schema and menu changes happen during development
+   - Bump `configVersion` here when the schema changes
+   - Real paths, AWS account IDs, and custom settings
+   - Separate files in `_dev/` and `_prod/`; never committed to Git
 
-2. **config.json** (Git-ignored)
-   - User's actual configuration
-   - Contains real paths, AWS account IDs, custom settings
-   - Separate files in _dev/ and _prod/ directories
-   - Never committed to Git
+2. **config.example.json** (Git-tracked) — **publish template only**
+   - Updated **from** `config.json` when branching / releasing (sanitize secrets → placeholders)
+   - Not edited ahead of `config.json` for day-to-day feature work
+
+### Publishing `config.example.json`
+
+**Working config first:** change `_dev/config.json` and bump `configVersion` there.
+
+**Before a release commit**, publish the public template:
+
+```powershell
+# From _dev/
+pwsh -NoProfile -File .\scripts\Publish-ConfigExample.ps1
+# or: .\scripts\Prepare-ConsoleRelease.ps1   # same publish step + checklist reminder
+```
+
+[Publish-ConfigExample.ps1](scripts/Publish-ConfigExample.ps1) reads `config.json`, merges into
+`config.example.json` using rules in
+[config-publish.manifest.json](scripts/config-publish.manifest.json), and **fails the build** if
+forbidden patterns or non-example AWS account ids remain.
+
+Manual rules (encoded in the manifest):
+
+- **Paths** — generic placeholders only; new `paths.*` keys require a manifest entry.
+- **AWS** — `environments` and account menu order stay the fictional example from the prior template.
+- **Menus / backupDev / packageManager** — structure copied from dev; strings sanitized.
+- **Secrets** — no employer paths, emails, or real account ids in the published file.
+
+`config.json` in `_dev/` and `_prod/` stays gitignored.
 
 ### Config Schema Structure
 
@@ -1047,24 +1072,15 @@ Call sites: `Show-EditConfigsMenu`, `Open-BackupDetailedLog`, `Open-BackupHistor
 
 ### 2. Adding a New Config Field
 
-**Step 1**: Add to [config.example.json](config.example.json:1)
-```json
-{
-  "paths": {
-    "existingPath": "...",
-    "myNewPath": "C:\\path\\to\\new\\location"
-  }
-}
-```
+**Step 1**: Add the field in `_dev/config.json` (working config).
 
-**Step 2**: Update configVersion in config.example.json
-```json
-{
-  "configVersion": "config.11"  // Increment from config.10
-}
-```
+**Step 2**: Bump `configVersion` in `config.json` (e.g. `config.10` → `config.11`).
 
-**Step 3**: Access in code (with backward compatibility)
+**Step 3**: When ready to release, add any new `paths.*` placeholder to
+[config-publish.manifest.json](scripts/config-publish.manifest.json), then run
+`Publish-ConfigExample.ps1` (same `configVersion` as dev).
+
+**Step 4**: Access in code (with backward compatibility)
 ```powershell
 # Check if field exists (for old configs)
 if ($script:Config.paths.PSObject.Properties.Name -contains "myNewPath" -and
@@ -1076,7 +1092,7 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "myNewPath" -and
 }
 ```
 
-**Step 4**: Document in CHANGELOG.md
+**Step 5**: Document in CHANGELOG.md
 ```markdown
 ### v1.10.0 (2025-XX-XX)
 
@@ -1190,12 +1206,8 @@ function Get-MyAwsResource {
 $script:ConsoleVersion = "1.12.0"  # From 1.11.1 (semantic versioning)
 ```
 
-**2. Update config.example.json** (if schema changed):
-```json
-{
-  "configVersion": "config.10"  // Increment by 1 if schema changed (e.g., config.9 → config.10)
-}
-```
+**2. Publish config.example.json** (if schema changed): bump `configVersion` in `config.json`, then
+`pwsh -NoProfile -File .\scripts\Publish-ConfigExample.ps1` (or `Prepare-ConsoleRelease.ps1`).
 
 **3. Update CHANGELOG.md**:
 ```markdown
