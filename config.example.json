@@ -226,7 +226,7 @@
       },
       {
         "text": "VS Code Settings",
-        "action": "\r\n            $vscodeSettingsPath = \"C:\\AppInstall\\scoop\\persist\\vscode\\data\\user-data\\User\\settings.json\"\r\n            if (Test-Path $vscodeSettingsPath) { Open-ConfigInEditor -Path $vscodeSettingsPath } else { Write-Host 'VS Code settings not found' -ForegroundColor Yellow }\r\n            Invoke-StandardPause\r\n        "
+        "action": "\r\n            $vscodeSettingsPath = \"C:\\path\\to\\vscode\\User\\settings.json\"\r\n            if (Test-Path $vscodeSettingsPath) { Open-ConfigInEditor -Path $vscodeSettingsPath } else { Write-Host 'VS Code settings not found' -ForegroundColor Yellow }\r\n            Invoke-StandardPause\r\n        "
       }
     ]
   },
@@ -294,7 +294,7 @@
     }
   },
   "_execAdminMergeSnippet": {
-    "_comment": "Optional: merge menus.Exec Admin and menus.Exec Admin More from this file — requires paths.devRoot -> exec-admin parent (e.g. C:\\AppInstall\\dev) and console.ps1 with Show-ExecAdminMenu / Show-ExecAdminMoreMenu. Primary item: Run full daily pipeline (-InvokeClaude); variants live under More options.",
+    "_comment": "Optional: merge menus.Exec Admin and menus.Exec Admin More from this file — requires paths.devRoot to the parent folder of your exec-admin clone and console.ps1 with Show-ExecAdminMenu / Show-ExecAdminMoreMenu. Primary item: Run full daily pipeline (-InvokeClaude); variants live under More options.",
     "mainMenuItem": {
       "text": "Exec Admin",
       "action": "\r\n            Show-ExecAdminMenu\r\n        "
@@ -346,7 +346,8 @@
       "paths.backupDestination": "Absolute path (e.g. a cloud-drive folder) or a path relative to the user profile",
       "mirror": "Folders are mirrored with robocopy /MIR; deletions propagate, so use the weekly zips to recover"
     }
-  },  "packageManager": {
+  },
+  "packageManager": {
     "lastSearchScope": "installed",
     "blockedUpdatesSectionExpanded": false,
     "wingetUnelevatedUpgradeIds": [

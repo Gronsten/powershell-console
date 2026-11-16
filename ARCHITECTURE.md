@@ -185,16 +185,33 @@ if ($scriptPath -match '[\\/]_dev[\\/]?$') {
 
 **Two Configuration Files:**
 
-1. **config.example.json** (Git-tracked)
-   - Template with placeholder values
-   - Defines schema structure
-   - Updated with new features in development
+1. **config.json** (Git-ignored) — **DEV working copy**
+   - Where schema and menu changes happen during development
+   - Bump `configVersion` here when the schema changes
+   - Real paths, AWS account IDs, and custom settings
+   - Separate files in `_dev/` and `_prod/`; never committed to Git
 
-2. **config.json** (Git-ignored)
-   - User's actual configuration
-   - Contains real paths, AWS account IDs, custom settings
-   - Separate files in _dev/ and _prod/ directories
-   - Never committed to Git
+2. **config.example.json** (Git-tracked) — **publish template only**
+   - Updated **from** `config.json` when branching / releasing (sanitize secrets → placeholders)
+   - Not edited ahead of `config.json` for day-to-day feature work
+
+### Publishing `config.example.json`
+
+When cutting a release, copy schema changes from `_dev/config.json` into `config.example.json`
+and **never** ship real identifiers:
+
+- **Paths** — generic placeholders (`C:\\path\\to\\dev`, `YourUsername`), not machine-specific
+  or employer paths.
+- **AWS** — example account ids (`123456789012`), empty instance ids, fictional environment keys
+  only; omit real `directoryMappings` targets from dev config unless they are already public repo
+  paths.
+- **Menus** — same structure and actions as dev; menu text can match production.
+- **Secrets** — no emails, account numbers, hostnames, VPN endpoints, backup destinations tied to
+  personal cloud storage, or employer org names in `wip.excludeRemotePatterns` unless you intend
+  them as documentation for your private fork.
+
+Keep `configVersion` in sync between the two files at publish time. `config.json` in `_dev/` and
+`_prod/` stays gitignored.
 
 ### Config Schema Structure
 
@@ -1047,24 +1064,23 @@ Call sites: `Show-EditConfigsMenu`, `Open-BackupDetailedLog`, `Open-BackupHistor
 
 ### 2. Adding a New Config Field
 
-**Step 1**: Add to [config.example.json](config.example.json:1)
+**Step 1**: Add the field in `_dev/config.json` (working config).
+
+**Step 2**: Bump `configVersion` in `config.json` (e.g. `config.10` → `config.11`).
+
+**Step 3**: When ready to release, copy the schema into [config.example.json](config.example.json:1)
+with example values, same `configVersion`.
 ```json
 {
   "paths": {
     "existingPath": "...",
     "myNewPath": "C:\\path\\to\\new\\location"
-  }
+  },
+  "configVersion": "config.11"
 }
 ```
 
-**Step 2**: Update configVersion in config.example.json
-```json
-{
-  "configVersion": "config.11"  // Increment from config.10
-}
-```
-
-**Step 3**: Access in code (with backward compatibility)
+**Step 4**: Access in code (with backward compatibility)
 ```powershell
 # Check if field exists (for old configs)
 if ($script:Config.paths.PSObject.Properties.Name -contains "myNewPath" -and
@@ -1076,7 +1092,7 @@ if ($script:Config.paths.PSObject.Properties.Name -contains "myNewPath" -and
 }
 ```
 
-**Step 4**: Document in CHANGELOG.md
+**Step 5**: Document in CHANGELOG.md
 ```markdown
 ### v1.10.0 (2025-XX-XX)
 
