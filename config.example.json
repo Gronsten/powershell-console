@@ -1,13 +1,13 @@
 {
   "paths": {
-    "vpnOutputPath": "C:\\path\\to\\vpn_output",
     "profilePath": "C:\\Users\\YourUsername\\Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1",
-    "devRoot": "C:\\path\\to\\dev",
+    "backupDestination": "C:\\path\\to\\cloud-drive\\DevBackup",
+    "rdcManagerPath": "C:\\path\\to\\RDCMan.exe",
+    "vpnOutputPath": "C:\\path\\to\\vpn_output",
     "oktaYamlPath": "C:\\Users\\YourUsername\\.okta\\okta.yaml",
     "workingDirectory": "C:\\path\\to\\powershell-console",
-    "rdcManagerPath": "C:\\path\\to\\RDCMan.exe",
-    "linksPath": "C:\\Users\\YourUsername\\Favorites\\Links\\",
-    "backupDestination": "C:\\path\\to\\cloud-drive\\DevBackup"
+    "devRoot": "C:\\path\\to\\dev",
+    "linksPath": "C:\\Users\\YourUsername\\Favorites\\Links\\"
   },
   "defaultConnection": {
     "instance": "",
@@ -129,15 +129,41 @@
         "action": "\r\n            Start-ExecAdminCapture -InvokeClaude\r\n        "
       },
       {
-        "text": "Capture only (no Claude) — troubleshoot",
-        "action": "\r\n            Start-ExecAdminCapture\r\n        "
+        "text": "Import manual transcripts",
+        "action": "\r\n            Start-ExecAdminImportManualPastes\r\n        "
       },
       {
-        "text": "More options…",
-        "action": "\r\n            Show-ExecAdminMoreMenu\r\n        "
+        "text": "Transcripts…",
+        "action": "\r\n            Show-ExecAdminTranscriptsMenu\r\n        "
+      },
+      {
+        "text": "Troubleshooting…",
+        "action": "\r\n            Show-ExecAdminTroubleshootingMenu\r\n        "
       }
     ],
-    "Exec Admin More": [
+    "Exec Admin Transcripts": [
+      {
+        "text": "List manual paste follow-ups",
+        "action": "\r\n            Start-ExecAdminListManualPaste\r\n        "
+      },
+      {
+        "text": "Import pasted transcripts",
+        "action": "\r\n            Start-ExecAdminImportManualPastes\r\n        "
+      },
+      {
+        "text": "Open paste folder (_paste)",
+        "action": "\r\n            Start-ExecAdminOpenPasteFolder\r\n        "
+      },
+      {
+        "text": "Dismiss manual-paste probe…",
+        "action": "\r\n            Start-ExecAdminDismissManualPaste\r\n        "
+      }
+    ],
+    "Exec Admin Troubleshooting": [
+      {
+        "text": "Capture only (no Claude)",
+        "action": "\r\n            Start-ExecAdminCapture\r\n        "
+      },
       {
         "text": "Weekly capture (+ Teams catalog rediscover)",
         "action": "\r\n            Start-ExecAdminCapture -TeamsRediscover\r\n        "
@@ -155,7 +181,7 @@
         "action": "\r\n            Start-ExecAdminCapture -ClaudeTranscripts\r\n        "
       },
       {
-        "text": "Capture only (skip Fireflies)",
+        "text": "Daily capture (skip Fireflies)",
         "action": "\r\n            Start-ExecAdminCapture -SkipFireflies\r\n        "
       },
       {
@@ -293,14 +319,15 @@
     }
   },
   "_execAdminMergeSnippet": {
-    "_comment": "Optional: merge menus.Exec Admin and menus.Exec Admin More from this file — requires paths.devRoot to the parent folder of your exec-admin clone and console.ps1 with Show-ExecAdminMenu / Show-ExecAdminMoreMenu. Primary item: Run full daily pipeline (-InvokeClaude); variants live under More options.",
+    "_comment": "Optional: merge menus.Exec Admin, Exec Admin Transcripts, and Exec Admin Troubleshooting from this file — requires paths.devRoot (parent of exec-admin). Legacy key Exec Admin More still works via Show-ExecAdminMoreMenu alias.",
     "mainMenuItem": {
       "text": "Exec Admin",
       "action": "\r\n            Show-ExecAdminMenu\r\n        "
     },
     "submenuNames": [
       "Exec Admin",
-      "Exec Admin More"
+      "Exec Admin Transcripts",
+      "Exec Admin Troubleshooting"
     ]
   },
   "backupDev": {
@@ -356,5 +383,5 @@
     ],
     "wingetUnelevatedShell": "pwsh"
   },
-  "configVersion": "config.23"
+  "configVersion": "config.24"
 }

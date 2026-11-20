@@ -7,7 +7,7 @@ param(
 )
 
 # Version constant
-$script:ConsoleVersion = "1.24.0"
+$script:ConsoleVersion = "1.24.1"
 
 # Detect environment based on script path
 $scriptPath = $PSScriptRoot
@@ -6121,6 +6121,98 @@ function Open-BackupHistoryLog {
     Invoke-StandardPause
 }
 
+function Get-ExecAdminRepoRoot {
+    if ($script:Config.paths.devRoot) {
+        $devRoot = $script:Config.paths.devRoot
+    }
+    else {
+        $devRoot = Split-Path $PSScriptRoot -Parent
+    }
+    return Join-Path $devRoot 'exec-admin'
+}
+
+function Invoke-ExecAdminPwshScript {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RelativeScriptPath,
+        [string[]]$ScriptArguments = @(),
+        [string]$Description = 'exec-admin script'
+    )
+
+    $repo = Get-ExecAdminRepoRoot
+    $scriptPath = Join-Path $repo $RelativeScriptPath
+    if (-not (Test-Path -LiteralPath $scriptPath)) {
+        Write-Host "Script not found: $scriptPath" -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+
+    $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+    if (-not $pwshPath) {
+        Write-Host 'pwsh (PowerShell 7) is required for exec-admin.' -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+
+    $argList = @('-NoProfile', '-File', $scriptPath) + $ScriptArguments
+    Write-Host "Running: pwsh $($argList -join ' ')" -ForegroundColor DarkGray
+    Write-Host ''
+    Push-Location $repo
+    try {
+        & $pwshPath @argList
+    }
+    finally {
+        Pop-Location
+    }
+    Write-Host ''
+    Invoke-StandardPause
+}
+
+function Start-ExecAdminImportManualPastes {
+    Invoke-ExecAdminPwshScript -RelativeScriptPath 'scripts\Import-ManualMeetingPastes.ps1' -Description 'Import manual meeting transcripts'
+}
+
+function Start-ExecAdminListManualPaste {
+    Invoke-ExecAdminPwshScript -RelativeScriptPath 'scripts\List-TranscriptManualPasteNeeded.ps1' -Description 'List manual transcript follow-ups'
+}
+
+function Start-ExecAdminOpenPasteFolder {
+    $repo = Get-ExecAdminRepoRoot
+    if (-not (Test-Path -LiteralPath $repo)) {
+        Write-Host "exec-admin repo not found: $repo" -ForegroundColor Red
+        Invoke-StandardPause
+        return
+    }
+    $pasteDir = Join-Path $repo 'raw\meetings\_paste'
+    New-Item -ItemType Directory -Force -Path $pasteDir | Out-Null
+    Start-Process -FilePath 'explorer.exe' -ArgumentList $pasteDir
+    Write-Host "Opened: $pasteDir" -ForegroundColor Green
+    Invoke-StandardPause
+}
+
+function Start-ExecAdminDismissManualPaste {
+    Write-Host 'Dismiss a manual-paste probe (no Teams transcript, or captured elsewhere).' -ForegroundColor Cyan
+    $eventId = Read-Host 'EventId (from list output)'
+    if ([string]::IsNullOrWhiteSpace($eventId)) {
+        Write-Host 'Cancelled.' -ForegroundColor Yellow
+        Invoke-StandardPause
+        return
+    }
+    $occurrence = Read-Host 'OccurrenceUtc (optional, e.g. 2026-11-18T13:00:00Z)'
+    Write-Host 'Reason: 1=no-transcription  2=captured-elsewhere  3=not-actionable'
+    $reasonPick = Read-Host 'Pick (default 1)'
+    $reason = switch ($reasonPick) {
+        '2' { 'captured-elsewhere' }
+        '3' { 'not-actionable' }
+        default { 'no-transcription' }
+    }
+    $note = Read-Host 'Note (optional)'
+    $args = @('-EventId', $eventId.Trim(), '-Reason', $reason)
+    if (-not [string]::IsNullOrWhiteSpace($occurrence)) { $args += @('-OccurrenceUtc', $occurrence.Trim()) }
+    if (-not [string]::IsNullOrWhiteSpace($note)) { $args += @('-Note', $note.Trim()) }
+    Invoke-ExecAdminPwshScript -RelativeScriptPath 'scripts\Dismiss-TranscriptManualPaste.ps1' -ScriptArguments $args -Description 'Dismiss manual-paste probe'
+}
+
 function Start-ExecAdminCapture {
     [CmdletBinding()]
     param(
@@ -6133,14 +6225,7 @@ function Start-ExecAdminCapture {
         [switch]$ClaudeTranscripts
     )
 
-    if ($script:Config.paths.devRoot) {
-        $devRoot = $script:Config.paths.devRoot
-    }
-    else {
-        $devRoot = Split-Path $PSScriptRoot -Parent
-    }
-
-    $repo = Join-Path $devRoot 'exec-admin'
+    $repo = Get-ExecAdminRepoRoot
     $captureScript = Join-Path $repo 'Invoke-ExecAdminDailyCapture.ps1'
 
     if (-not (Test-Path -LiteralPath $captureScript)) {
@@ -6181,8 +6266,57 @@ function Start-ExecAdminCapture {
     Invoke-StandardPause
 }
 
-function Show-ExecAdminMoreMenu {
+function Get-ExecAdminSubmenuTitle {
+    param(
+        [string]$PreferredTitle,
+        [string]$LegacyTitle
+    )
+    if ($script:Config.PSObject.Properties['menus'] -and
+        $script:Config.menus.PSObject.Properties[$PreferredTitle]) {
+        return $PreferredTitle
+    }
+    if ($script:Config.PSObject.Properties['menus'] -and
+        $script:Config.menus.PSObject.Properties[$LegacyTitle]) {
+        return $LegacyTitle
+    }
+    return $PreferredTitle
+}
+
+function Show-ExecAdminTranscriptsMenu {
     $defaultMenu = @(
+        (New-MenuAction 'List manual paste follow-ups' {
+            Start-ExecAdminListManualPaste
+        }),
+        (New-MenuAction 'Import pasted transcripts' {
+            Start-ExecAdminImportManualPastes
+        }),
+        (New-MenuAction 'Open paste folder (_paste)' {
+            Start-ExecAdminOpenPasteFolder
+        }),
+        (New-MenuAction 'Dismiss manual-paste probe…' {
+            Start-ExecAdminDismissManualPaste
+        })
+    )
+
+    $menuItems = Get-MenuFromConfig -MenuTitle 'Exec Admin Transcripts' -DefaultMenuItems $defaultMenu
+
+    do {
+        $choice = Show-ArrowMenu -MenuItems $menuItems -Title 'Exec Admin — Transcripts'
+
+        if ($choice -eq -1) {
+            return
+        }
+
+        $selectedAction = $menuItems[$choice]
+        & $selectedAction.Action
+    } while ($true)
+}
+
+function Show-ExecAdminTroubleshootingMenu {
+    $defaultMenu = @(
+        (New-MenuAction 'Capture only (no Claude)' {
+            Start-ExecAdminCapture
+        }),
         (New-MenuAction 'Weekly capture (+ Teams catalog rediscover)' {
             Start-ExecAdminCapture -TeamsRediscover
         }),
@@ -6195,7 +6329,7 @@ function Show-ExecAdminMoreMenu {
         (New-MenuAction 'Claude transcripts only' {
             Start-ExecAdminCapture -ClaudeTranscripts
         }),
-        (New-MenuAction 'Capture only (skip Fireflies)' {
+        (New-MenuAction 'Daily capture (skip Fireflies)' {
             Start-ExecAdminCapture -SkipFireflies
         }),
         (New-MenuAction 'Pipeline health only (dry run)' {
@@ -6203,10 +6337,11 @@ function Show-ExecAdminMoreMenu {
         })
     )
 
-    $menuItems = Get-MenuFromConfig -MenuTitle 'Exec Admin More' -DefaultMenuItems $defaultMenu
+    $menuTitle = Get-ExecAdminSubmenuTitle -PreferredTitle 'Exec Admin Troubleshooting' -LegacyTitle 'Exec Admin More'
+    $menuItems = Get-MenuFromConfig -MenuTitle $menuTitle -DefaultMenuItems $defaultMenu
 
     do {
-        $choice = Show-ArrowMenu -MenuItems $menuItems -Title 'Exec Admin — More options'
+        $choice = Show-ArrowMenu -MenuItems $menuItems -Title 'Exec Admin — Troubleshooting'
 
         if ($choice -eq -1) {
             return
@@ -6217,16 +6352,23 @@ function Show-ExecAdminMoreMenu {
     } while ($true)
 }
 
+function Show-ExecAdminMoreMenu {
+    Show-ExecAdminTroubleshootingMenu
+}
+
 function Show-ExecAdminMenu {
     $defaultMenu = @(
         (New-MenuAction 'Run full daily pipeline (capture + Claude)' {
             Start-ExecAdminCapture -InvokeClaude
         }),
-        (New-MenuAction 'Capture only (no Claude) — troubleshoot' {
-            Start-ExecAdminCapture
+        (New-MenuAction 'Import manual transcripts' {
+            Start-ExecAdminImportManualPastes
         }),
-        (New-MenuAction 'More options…' {
-            Show-ExecAdminMoreMenu
+        (New-MenuAction 'Transcripts…' {
+            Show-ExecAdminTranscriptsMenu
+        }),
+        (New-MenuAction 'Troubleshooting…' {
+            Show-ExecAdminTroubleshootingMenu
         })
     )
 

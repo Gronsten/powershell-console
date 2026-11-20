@@ -20,6 +20,18 @@ All notable changes to this project have been documented during development.
 
 ## Version History
 
+### v1.24.1 (2026-11-20)
+
+**Config Changes Required** (`config.23` → `config.24`):
+- Merge `menus.Exec Admin`, `menus.Exec Admin Transcripts`, and `menus.Exec Admin
+  Troubleshooting` from `config.example.json` (replaces `Exec Admin More` when present).
+
+**New Features:**
+- **Exec Admin menu** — **Import manual transcripts** on the main menu; **Transcripts…**
+  submenu (list, import, open `_paste`, dismiss probe); **Troubleshooting…** renamed from
+  More options (includes **Capture only (no Claude)**). Legacy `Exec Admin More` config key
+  still loads when **Exec Admin Troubleshooting** is absent.
+
 ### v1.24.0 (2026-11-16)
 
 **Config Changes Required** (`config.22` to `config.23`):
